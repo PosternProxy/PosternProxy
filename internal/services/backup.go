@@ -1,0 +1,287 @@
+package services
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// BackupPayload is the JSON structure for export/import.
+// Users table is intentionally excluded — it is never overwritten by a restore.
+type BackupPayload struct {
+	Version    string                      `json:"version"`
+	ExportedAt string                      `json:"exported_at"`
+	Tables     map[string][]map[string]any `json:"tables"`
+}
+
+var backupVersion = "1.0"
+
+// tableOrder determines insert order on restore to respect FK constraints.
+var tableOrder = []string{
+	"certificates",
+	"access_lists",
+	"access_list_clients",
+	"access_list_auth",
+	"proxy_hosts",
+	"redirection_hosts",
+	"stream_hosts",
+	"dead_hosts",
+	"port_forwards",
+	"settings",
+}
+
+// tableColumns is the per-table allowlist of valid column names accepted during
+// backup import. Column names are interpolated into SQL (they cannot be
+// parameterised), so any name not on this list is rejected outright.
+//
+// Keep this map in sync with migrations: add a column here when you add it to
+// the schema, remove it when a DROP COLUMN migration lands.
+var tableColumns = map[string]map[string]bool{
+	"certificates": strset(
+		"id", "name", "provider", "domain_names", "cert_path", "key_path",
+		"expires_at", "status", "error_message", "created_at", "updated_at",
+	),
+	"access_lists": strset(
+		"id", "name", "created_at", "updated_at",
+	),
+	"access_list_clients": strset(
+		"id", "access_list_id", "address", "directive", "sort_order",
+	),
+	// access_list_auth was dropped in migration 015; kept here so that old
+	// backups containing this table produce a clear column-validation error
+	// rather than a confusing SQL error.
+	"access_list_auth": strset(
+		"id", "access_list_id", "username", "password_hash",
+	),
+	"proxy_hosts": strset(
+		"id", "server_id", "domain_names", "forward_scheme", "forward_host", "forward_port",
+		"certificate_id", "ssl_forced", "hsts_enabled", "hsts_subdomains",
+		"http2_support", "websocket_support", "access_list_id",
+		"advanced_config", "locations", "enabled", "caddy_id",
+		// health checks (migration 003)
+		"hc_enabled", "hc_active_path", "hc_active_interval", "hc_active_timeout",
+		"hc_active_expect_status", "hc_passive_fail_duration", "hc_passive_max_fails",
+		"hc_passive_unhealthy_latency",
+		// rate limiting (migration 004)
+		"rate_limit_enabled", "rate_limit_requests", "rate_limit_window",
+		// misc feature columns (migrations 006-012)
+		"tls_passthrough", "error_pages", "custom_headers",
+		"extra_upstreams", "lb_policy", "http_only",
+		"created_at", "updated_at",
+	),
+	"redirection_hosts": strset(
+		"id", "server_id", "domain_names", "forward_scheme", "forward_domain_name",
+		"forward_path", "preserve_path", "status_code", "certificate_id",
+		"ssl_forced", "hsts_enabled", "access_list_id", "advanced_config",
+		"enabled", "caddy_id", "created_at", "updated_at",
+	),
+	"stream_hosts": strset(
+		"id", "server_id", "incoming_port", "forward_host", "forward_port",
+		"protocol", "tcp_sni_match", "tcp_proxy_protocol", "udp_timeout",
+		"enabled", "caddy_id", "created_at", "updated_at",
+	),
+	"dead_hosts": strset(
+		"id", "server_id", "domain_names", "certificate_id", "ssl_forced",
+		"access_list_id", "advanced_config", "enabled", "caddy_id",
+		"status_code", "custom_body", "created_at", "updated_at",
+	),
+	"port_forwards": strset(
+		"id", "server_id", "protocol", "incoming_port", "forward_host",
+		"forward_port", "interface", "method", "enabled",
+		"created_at", "updated_at",
+	),
+	"settings": strset("key", "value"),
+}
+
+func strset(cols ...string) map[string]bool {
+	m := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		m[c] = true
+	}
+	return m
+}
+
+// BackupService handles database export and import.
+type BackupService struct {
+	db      *sql.DB
+	syncSvc *CaddySyncService
+}
+
+func NewBackupService(db *sql.DB, syncSvc *CaddySyncService) *BackupService {
+	return &BackupService{db: db, syncSvc: syncSvc}
+}
+
+// Export dumps all configured tables to a BackupPayload.
+func (s *BackupService) Export(ctx context.Context) (*BackupPayload, error) {
+	payload := &BackupPayload{
+		Version:    backupVersion,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Tables:     make(map[string][]map[string]any),
+	}
+
+	for _, table := range tableOrder {
+		rows, err := s.dumpTable(ctx, table)
+		if err != nil {
+			return nil, fmt.Errorf("dump %s: %w", table, err)
+		}
+		payload.Tables[table] = rows
+	}
+
+	return payload, nil
+}
+
+// Import restores a BackupPayload into the database and re-syncs Caddy.
+// The users table is never touched. All other tables are cleared and replaced.
+func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (restored int, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Clear existing data in reverse FK order.
+	clearOrder := []string{
+		"port_forwards",
+		"settings",
+		"dead_hosts",
+		"stream_hosts",
+		"redirection_hosts",
+		"proxy_hosts",
+		"access_list_auth",
+		"access_list_clients",
+		"access_lists",
+		"certificates",
+	}
+	for _, table := range clearOrder {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			return 0, fmt.Errorf("clear %s: %w", table, err)
+		}
+	}
+
+	// Re-insert in FK-safe order.
+	for _, table := range tableOrder {
+		rows, ok := payload.Tables[table]
+		if !ok || len(rows) == 0 {
+			continue
+		}
+		for _, row := range rows {
+			if err := insertRow(ctx, tx, table, row); err != nil {
+				return 0, fmt.Errorf("insert into %s: %w", table, err)
+			}
+			restored++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+
+	// Re-sync Caddy with the restored configuration.
+	if s.syncSvc != nil {
+		if err := s.syncSvc.FullSync(ctx); err != nil {
+			// Non-fatal — the DB is restored; Caddy will sync on next restart.
+			fmt.Printf("warning: caddy sync after restore failed: %v\n", err)
+		}
+	}
+
+	return restored, nil
+}
+
+// dumpTable returns all rows from a table as a slice of generic maps.
+func (s *BackupService) dumpTable(ctx context.Context, table string) ([]map[string]any, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT * FROM "+table) //nolint:gosec
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []map[string]any
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		m := make(map[string]any, len(cols))
+		for i, col := range cols {
+			// SQLite returns []byte for TEXT/BLOB; convert to string.
+			if b, ok := vals[i].([]byte); ok {
+				m[col] = string(b)
+			} else {
+				m[col] = vals[i]
+			}
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// insertRow builds and executes an INSERT OR REPLACE for a single backup row.
+// Column names are validated against tableColumns before being interpolated into
+// the query — they cannot be parameterised by the database/sql driver, so an
+// allowlist is the only safe approach.
+// Columns are sorted before insertion for deterministic query shape.
+func insertRow(ctx context.Context, tx *sql.Tx, table string, row map[string]any) error {
+	if len(row) == 0 {
+		return nil
+	}
+
+	allowed, ok := tableColumns[table]
+	if !ok {
+		return fmt.Errorf("table %q is not in the backup allowlist", table)
+	}
+
+	cols := make([]string, 0, len(row))
+	for col := range row {
+		if !allowed[col] {
+			return fmt.Errorf("column %q is not a known column of table %q — backup may be malformed or tampered", col, table)
+		}
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+
+	vals := make([]any, len(cols))
+	placeholders := make([]string, len(cols))
+	for i, col := range cols {
+		vals[i] = row[col]
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf(
+		"INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
+		table,
+		strings.Join(cols, ", "),
+		strings.Join(placeholders, ", "),
+	)
+	_, err := tx.ExecContext(ctx, query, vals...)
+	return err
+}
+
+// MarshalPayload marshals the payload to JSON bytes.
+func MarshalPayload(p *BackupPayload) ([]byte, error) {
+	return json.MarshalIndent(p, "", "  ")
+}
+
+// UnmarshalPayload parses JSON bytes into a BackupPayload.
+func UnmarshalPayload(data []byte) (*BackupPayload, error) {
+	var p BackupPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+	if p.Version == "" {
+		return nil, fmt.Errorf("missing version field — may not be a valid PosternProxy backup")
+	}
+	return &p, nil
+}
