@@ -1,0 +1,60 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+docs/public/
+docs/resources/_gen/
+
+# Embedded UI dist — real build output is copied here by build.sh
+# Placeholder files (index.html, .gitkeep) ARE tracked; built assets are not.
+internal/ui/dist/assets/
+internal/ui/dist/*.js
+internal/ui/dist/*.css
+
+# Root-level binaries produced by build.sh
+/posternproxy
+/posternproxy-agent
+
+# Data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment / secrets
+*.env
+.env.*
+!*.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates
+certs/
+*.pem
+*.key
+*.crt
+
+# Air (Go hot reload)
+tmp/
+
+# Internal/private docs
+docs/sales-email-template.md
