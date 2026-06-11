@@ -1,0 +1,31 @@
+.book-brand a {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.book-brand img {
+  width: 3rem;
+  height: 3rem;
+  padding: 0.2rem;
+  object-fit: contain;
+  background: #ffffff;
+  border-radius: 0.5rem;
+}
+
+.markdown code {
+  color: #e6edf3;
+  background: #21262d;
+  border-color: #30363d;
+}
+
+.markdown pre,
+.markdown .highlight pre {
+  color: #e6edf3;
+  background: #0d1117;
+  border-color: #30363d;
+}
+
+.markdown pre code {
+  color: inherit;
+  background: transparent;
+}
