@@ -1,0 +1,25 @@
+services:
+  posternproxy-agent:
+    image: ghcr.io/posternproxy/posternproxy-agent:latest
+    container_name: posternproxy-agent
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - agent_data:/data
+    # Port forwarding requires elevated network capabilities.
+    # If you do not use port forwarding, these can be removed.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+    sysctls:
+      - net.ipv4.ip_forward=1
+    environment:
+      POSTERNPROXY_CONTROLLER_URL: ${POSTERNPROXY_CONTROLLER_URL}
+      POSTERNPROXY_AGENT_TOKEN: ${POSTERNPROXY_AGENT_TOKEN}
+      POSTERNPROXY_SERVER_ID: ${POSTERNPROXY_SERVER_ID}
+
+volumes:
+  agent_data:

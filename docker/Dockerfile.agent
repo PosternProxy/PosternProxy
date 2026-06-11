@@ -1,0 +1,32 @@
+# Stage 1: Build Caddy with L4 + rate-limit modules
+FROM golang:1.25-alpine AS caddy-builder
+RUN apk add --no-cache git
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+RUN xcaddy build \
+    --with github.com/mholt/caddy-l4 \
+    --with github.com/mholt/caddy-ratelimit \
+    --output /usr/local/bin/caddy
+
+# Stage 2: Build agent binary
+FROM golang:1.25-alpine AS agent-builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /posternproxy-agent ./cmd/posternproxy-agent
+
+# Stage 3: Runtime image
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates iptables \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=caddy-builder /usr/local/bin/caddy /usr/local/bin/caddy
+COPY --from=agent-builder /posternproxy-agent /usr/local/bin/posternproxy-agent
+COPY entrypoint-agent.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && mkdir -p /data/certs
+
+VOLUME /data
+EXPOSE 80 443
+
+ENTRYPOINT ["/entrypoint.sh"]
