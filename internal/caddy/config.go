@@ -30,22 +30,44 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 		}
 	}
 
-	// --- Normal proxy hosts → HTTPS routes ---
+	// --- Normal proxy hosts ---
+	// A host is served over HTTPS (:443) when it forces SSL (Caddy provisions a
+	// cert via ACME) or when a certificate is explicitly assigned. A host that
+	// does NOT force SSL is also served directly over plain HTTP (:80) so it
+	// works immediately without any certificate. SSL-forced hosts are not put on
+	// :80 directly — the :80 redirect catch-all sends them to HTTPS.
+	var http80Routes []*Route
 	for i := range normalHosts {
 		h := &normalHosts[i]
 		var al *models.AccessList
 		if h.AccessListID != nil {
 			al = in.accessListByID(*h.AccessListID)
 		}
-		route, err := BuildProxyHostRoute(h, al)
-		if err != nil {
-			return nil, fmt.Errorf("proxy host %d: %w", h.ID, err)
+
+		serveHTTPS := h.SSLForced || h.CertificateID != nil
+		if serveHTTPS {
+			route, err := BuildProxyHostRoute(h, al)
+			if err != nil {
+				return nil, fmt.Errorf("proxy host %d: %w", h.ID, err)
+			}
+			httpRoutes = append(httpRoutes, route)
 		}
-		httpRoutes = append(httpRoutes, route)
+
+		if !h.SSLForced {
+			route, err := BuildProxyHostRoute(h, al)
+			if err != nil {
+				return nil, fmt.Errorf("proxy host %d (http): %w", h.ID, err)
+			}
+			// When the same host is also on :443, drop the @id here so the two
+			// routes don't collide (Caddy requires @id to be unique).
+			if serveHTTPS {
+				route.ID = ""
+			}
+			http80Routes = append(http80Routes, route)
+		}
 	}
 
 	// --- HTTP-only proxy hosts → plain :80 routes (no TLS, no redirect) ---
-	var http80Routes []*Route
 	for i := range httpOnlyHosts {
 		h := &httpOnlyHosts[i]
 		var al *models.AccessList
@@ -60,27 +82,54 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 	}
 
 	// --- Redirection hosts ---
-	for _, h := range in.RedirectionHosts {
+	// Same HTTP/HTTPS split as proxy hosts: served on :443 when SSL is forced or a
+	// certificate is assigned, and directly on :80 when not forced so the redirect
+	// works without a certificate. SSL-forced ones use the :80 redirect catch-all.
+	for i := range in.RedirectionHosts {
+		h := &in.RedirectionHosts[i]
 		if !h.Enabled {
 			continue
 		}
-		route, err := BuildRedirectionHostRoute(&h)
-		if err != nil {
-			return nil, fmt.Errorf("redirection host %d: %w", h.ID, err)
+		serveHTTPS := h.SSLForced || h.CertificateID != nil
+		if serveHTTPS {
+			route, err := BuildRedirectionHostRoute(h)
+			if err != nil {
+				return nil, fmt.Errorf("redirection host %d: %w", h.ID, err)
+			}
+			httpRoutes = append(httpRoutes, route)
 		}
-		httpRoutes = append(httpRoutes, route)
+		if !h.SSLForced {
+			route, err := BuildRedirectionHostRoute(h)
+			if err != nil {
+				return nil, fmt.Errorf("redirection host %d (http): %w", h.ID, err)
+			}
+			if serveHTTPS {
+				route.ID = ""
+			}
+			http80Routes = append(http80Routes, route)
+		}
 	}
 
 	// --- Dead hosts ---
-	for _, h := range in.DeadHosts {
+	// A parked-domain response should answer over plain HTTP too, so serve dead
+	// hosts on both the :443 and :80 servers.
+	for i := range in.DeadHosts {
+		h := &in.DeadHosts[i]
 		if !h.Enabled {
 			continue
 		}
-		route, err := BuildDeadHostRoute(&h)
+		route, err := BuildDeadHostRoute(h, in.ControllerVersion)
 		if err != nil {
 			return nil, fmt.Errorf("dead host %d: %w", h.ID, err)
 		}
 		httpRoutes = append(httpRoutes, route)
+
+		httpRoute, err := BuildDeadHostRoute(h, in.ControllerVersion)
+		if err != nil {
+			return nil, fmt.Errorf("dead host %d (http): %w", h.ID, err)
+		}
+		httpRoute.ID = "" // avoid duplicate @id across the :443 and :80 servers
+		http80Routes = append(http80Routes, httpRoute)
 	}
 
 	// --- Stream hosts (Layer 4) ---
@@ -145,7 +194,7 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 
 	// Build per-host custom error pages → server-level error routes.
 	// All proxy hosts (passthrough and normal) are eligible.
-	errorRoutes := BuildErrorRoutes(in.ProxyHosts)
+	errorRoutes := BuildErrorRoutes(in.ProxyHosts, in.ControllerVersion)
 	var serverErrors *ServerErrors
 	if len(errorRoutes) > 0 {
 		serverErrors = &ServerErrors{Routes: errorRoutes}
@@ -157,12 +206,22 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 				Listen: httpsListen,
 				Routes: httpRoutes,
 				Errors: serverErrors,
+				// We own the :80 server (direct-serve + redirect catch-all), so
+				// keep Caddy from adding its own competing HTTP→HTTPS redirects.
+				AutomaticHTTPS: &AutoHTTPS{DisableRedirects: true},
 			},
 			"http": {
 				Listen: []string{":80"},
 				Routes: buildHTTP80Routes(http80Routes),
+				Errors: serverErrors,
 			},
 		},
+	}
+
+	// HTTP/2 is a server-wide setting; restrict the HTTPS listener to HTTP/1.1
+	// when disabled for this server.
+	if in.HTTP2Disabled {
+		httpApp.Servers["https"].Protocols = []string{"h1"}
 	}
 
 	httpRaw, err := json.Marshal(httpApp)
@@ -205,6 +264,11 @@ type BuildInput struct {
 	// AgentCertDir is set for remote servers. When non-empty, BuildTLSApp uses
 	// predictable agent-side paths instead of the controller's local file paths.
 	AgentCertDir string
+	// HTTP2Disabled, when true, restricts the HTTPS server to HTTP/1.1. Inverted
+	// (zero value = enabled) so callers that don't set it keep the Caddy default.
+	HTTP2Disabled bool
+	// ControllerVersion is rendered into generated operator-facing pages.
+	ControllerVersion string
 }
 
 // buildHTTP80Routes returns the route list for the plain-HTTP (:80) server.

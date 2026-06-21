@@ -15,35 +15,60 @@ PosternProxy installs directly on Debian 11/12 or Ubuntu 22.04/24.04. No Docker 
 
 ## Automated install
 
-The install script handles everything: building Caddy with required plugins, creating system users, configuring systemd, UFW, fail2ban, and unattended-upgrades.
+The install script handles everything: installing the bundled Caddy, creating system users, configuring systemd, UFW, fail2ban, and unattended-upgrades.
 
-**Step 1 — Build the binary**
+**Step 1 — Download the release binaries**
 
-On your development machine (or CI), run:
+Download the latest release from the
+[GitHub releases page](https://github.com/PosternProxy/PosternProxy/releases/).
+Each release provides three binaries for your server's architecture (`amd64` for
+most servers, `arm64` for ARM):
+
+| Binary | Purpose |
+|---|---|
+| `posternproxy` | The controller (management UI + API) |
+| `posternproxy-agent` | The remote agent — required to manage remote servers |
+| `caddy` | A custom Caddy build with the L4 and rate-limit plugins |
+
+The installer looks for the binaries named exactly `posternproxy`,
+`posternproxy-agent`, and `caddy`. If the release assets carry a platform suffix
+(e.g. `posternproxy-linux-amd64`), rename them to the bare names above.
+
+{{< hint info >}}
+**Prefer to build it yourself?**
+See [Building from source]({{< relref "/getting-started/building-from-source" >}})
+for building the binaries on Linux or Windows.
+{{< /hint >}}
+
+**Step 2 — Copy the binaries and the install script to the server**
+
+Put the three binaries and `install.sh` in one directory — the installer finds the
+binaries in the directory it runs from. The install script ships with the release;
+it is also available at `scripts/install.sh` in the repository.
 
 ```bash
-bash scripts/build.sh
+ssh root@your-server 'mkdir -p /tmp/posternproxy'
+scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
 ```
 
-This produces `./posternproxy` (controller) and `./posternproxy-agent` (remote agent).
-
-**Step 2 — Copy the binary to the server**
-
-```bash
-scp posternproxy user@your-server:/tmp/
-```
+Notes:
+- The `caddy` binary is the custom build from Step 1. Shipping it means the
+  installer skips compiling Caddy on the server, so **no Go toolchain is
+  installed on production**. If you omit it, the installer falls back to
+  building Caddy from source (and installs Go to do so).
+- The `posternproxy-agent` binary is optional for a controller-only install, but
+  it is required for provisioning remote nodes — copy it now to avoid a second trip.
 
 **Step 3 — Run the install script**
 
 ```bash
 ssh root@your-server
-cd /tmp
-bash /path/to/scripts/install.sh
+bash /tmp/posternproxy/install.sh
 ```
 
 The script will:
 
-1. Install Go (if needed) and build Caddy with the L4 and rate-limit plugins
+1. Install the custom Caddy binary you shipped (or, if none was shipped, install Go and build Caddy with the L4 and rate-limit plugins on the server)
 2. Create `caddy` and `posternproxy` system users (no login shell)
 3. Generate a random JWT secret and write `/etc/posternproxy/config.env`
 4. Install hardened systemd services for both Caddy and PosternProxy
@@ -66,10 +91,10 @@ Once complete, the UI is available at:
 http://<your-server-ip>:81
 ```
 
-On first boot, PosternProxy creates an admin account and **prints a generated password to the console** (stderr). Check the service logs immediately after startup:
+On first boot, PosternProxy creates an admin account and **prints a generated password to stderr**, which the systemd service writes to its log file (not the journal). Check it immediately after startup:
 
 ```bash
-journalctl -u posternproxy --no-pager | grep -A5 "INITIAL SETUP"
+grep -A6 "INITIAL SETUP" /var/log/posternproxy/posternproxy.log
 ```
 
 The banner looks like:
@@ -95,12 +120,13 @@ Set `POSTERNPROXY_ADMIN_PASSWORD` in `/etc/posternproxy/config.env` before the f
 
 {{< hint warning >}}
 **Lost the generated password?**
-If you missed the banner, use the `reset-password` subcommand to recover access without running the server:
+If you missed the banner, use the `reset-password` subcommand to recover access without running the server. Run it as the `posternproxy` user with the config loaded, so it uses the correct database path and does not create root-owned database files:
 
 ```bash
-posternproxy reset-password
-# or for a specific account:
-posternproxy reset-password --email admin@posternproxy.local
+sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; \
+  /usr/local/bin/posternproxy reset-password'
+
+# or for a specific account, append: --email admin@posternproxy.local
 ```
 
 A new random password is printed to the terminal.
@@ -121,6 +147,7 @@ PosternProxy is configured via `/etc/posternproxy/config.env`. All variables are
 | `POSTERNPROXY_AGENT_BIN_PATH` | `/usr/local/bin/posternproxy-agent` | Agent binary for provisioning |
 | `POSTERNPROXY_ADMIN_EMAIL` | `admin@posternproxy.local` | Initial admin email (first boot only) |
 | `POSTERNPROXY_ADMIN_PASSWORD` | *(random generated)* | Initial admin password (first boot only — printed to stderr if not set) |
+| `POSTERNPROXY_BEHIND_TLS_PROXY` | `true` | Marks session/CSRF cookies `Secure`. The installer writes `false` because the UI is served over HTTP on port 81 — browsers drop `Secure` cookies over HTTP, causing "missing CSRF token" errors. Set to `true` only when the UI is fronted by TLS and accessed over HTTPS. |
 
 ## Systemd management
 

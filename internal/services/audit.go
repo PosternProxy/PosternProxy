@@ -68,9 +68,17 @@ func (s *AuditService) List(ctx context.Context, resourceType string, serverID *
 	var entries []models.AuditLog
 	for rows.Next() {
 		var e models.AuditLog
-		if err := rows.Scan(&e.ID, &e.UserID, &e.Action, &e.ResourceType, &e.ResourceID, &e.Details, &e.IPAddress, &e.CreatedAt); err != nil {
+		// The driver returns the TEXT details column as a string, which can't be
+		// scanned straight into json.RawMessage — scan into a string first, then
+		// convert (the same pattern used for other JSON columns).
+		var details string
+		if err := rows.Scan(&e.ID, &e.UserID, &e.Action, &e.ResourceType, &e.ResourceID, &details, &e.IPAddress, &e.CreatedAt); err != nil {
 			return nil, 0, err
 		}
+		if details == "" {
+			details = "{}"
+		}
+		e.Details = json.RawMessage(details)
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()

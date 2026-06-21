@@ -43,7 +43,6 @@ func (s *NginxImportService) Confirm(ctx context.Context, callerID *int64, resul
 			ForwardHost:     ph.ForwardHost,
 			ForwardPort:     ph.ForwardPort,
 			SSLForced:       ph.SSLForced,
-			HTTP2Support:    true,
 			Locations:       json.RawMessage("[]"),
 			RateLimitWindow: "1m",
 		}

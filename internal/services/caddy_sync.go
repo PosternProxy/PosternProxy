@@ -19,13 +19,14 @@ const agentCertDir = "/var/lib/posternproxy-agent/certs"
 // CaddySyncService rebuilds and pushes the full Caddy configuration from the DB.
 // It is called once on startup and can be triggered manually after bulk changes.
 type CaddySyncService struct {
-	db    *sql.DB
-	caddy *caddy.Client
-	hub   *agent.Hub
+	db      *sql.DB
+	caddy   *caddy.Client
+	hub     *agent.Hub
+	version string
 }
 
-func NewCaddySyncService(db *sql.DB, caddyClient *caddy.Client, hub *agent.Hub) *CaddySyncService {
-	return &CaddySyncService{db: db, caddy: caddyClient, hub: hub}
+func NewCaddySyncService(db *sql.DB, caddyClient *caddy.Client, hub *agent.Hub, version string) *CaddySyncService {
+	return &CaddySyncService{db: db, caddy: caddyClient, hub: hub, version: version}
 }
 
 // FullSync reads all enabled entities for the local server (server_id=1), builds
@@ -110,6 +111,28 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 	return nil
 }
 
+// applyLocalOrResync runs an incremental apply against the local Caddy admin
+// API. Incremental calls target paths like apps/http/servers/https/routes that
+// only exist once a full config has been loaded; if the boot-time sync lost the
+// race with Caddy starting, those paths are absent and the call fails. Rather
+// than leave the change unapplied (the old behaviour, which silently dropped it),
+// fall back to a full POST /load resync that rebuilds the whole structure from
+// the DB.
+func (s *CaddySyncService) applyLocalOrResync(ctx context.Context, incremental func() error) error {
+	if err := incremental(); err != nil {
+		log.Warn().Err(err).Msg("incremental Caddy apply failed; falling back to full resync")
+		if syncErr := s.FullSync(ctx); syncErr != nil {
+			return fmt.Errorf("incremental apply failed (%v) and full resync failed: %w", err, syncErr)
+		}
+	}
+	return nil
+}
+
+// Reachable reports whether the local Caddy admin API is responding.
+func (s *CaddySyncService) Reachable() bool {
+	return s.caddy.Ping() == nil
+}
+
 func (s *CaddySyncService) buildInput(ctx context.Context, serverID int64) (*caddy.BuildInput, error) {
 	proxyHosts, err := s.loadProxyHosts(ctx, serverID)
 	if err != nil {
@@ -141,13 +164,19 @@ func (s *CaddySyncService) buildInput(ctx context.Context, serverID int64) (*cad
 		return nil, fmt.Errorf("load access lists: %w", err)
 	}
 
+	// HTTP/2 is per-server; default enabled if the row/column is missing.
+	http2Enabled := 1
+	_ = s.db.QueryRowContext(ctx, `SELECT http2_enabled FROM servers WHERE id = ?`, serverID).Scan(&http2Enabled)
+
 	return &caddy.BuildInput{
-		ProxyHosts:       proxyHosts,
-		RedirectionHosts: redirectionHosts,
-		StreamHosts:      streamHosts,
-		DeadHosts:        deadHosts,
-		Certificates:     certificates,
-		AccessLists:      accessLists,
+		ProxyHosts:        proxyHosts,
+		RedirectionHosts:  redirectionHosts,
+		StreamHosts:       streamHosts,
+		DeadHosts:         deadHosts,
+		Certificates:      certificates,
+		AccessLists:       accessLists,
+		HTTP2Disabled:     http2Enabled == 0,
+		ControllerVersion: s.version,
 	}, nil
 }
 
@@ -164,7 +193,7 @@ func (s *CaddySyncService) loadProxyHosts(ctx context.Context, serverID int64) (
 func (s *CaddySyncService) loadRedirectionHosts(ctx context.Context, serverID int64) ([]models.RedirectionHost, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, server_id, domain_names, forward_scheme, forward_domain_name, forward_path,
-		       preserve_path, status_code, certificate_id, access_list_id, enabled, caddy_id,
+		       preserve_path, status_code, certificate_id, ssl_forced, access_list_id, enabled, caddy_id,
 		       created_at, updated_at
 		FROM redirection_hosts WHERE enabled = 1 AND server_id = ?`, serverID)
 	if err != nil {
@@ -175,17 +204,18 @@ func (s *CaddySyncService) loadRedirectionHosts(ctx context.Context, serverID in
 	var hosts []models.RedirectionHost
 	for rows.Next() {
 		var h models.RedirectionHost
-		var preservePath int
+		var preservePath, sslForced int
 		var domainNames string
 		if err := rows.Scan(
 			&h.ID, &h.ServerID, &domainNames, &h.ForwardScheme, &h.ForwardDomainName, &h.ForwardPath,
-			&preservePath, &h.StatusCode, &h.CertificateID, &h.AccessListID, &h.Enabled, &h.CaddyID,
+			&preservePath, &h.StatusCode, &h.CertificateID, &sslForced, &h.AccessListID, &h.Enabled, &h.CaddyID,
 			&h.CreatedAt, &h.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
 		h.DomainNames = json.RawMessage(domainNames)
 		h.PreservePath = preservePath == 1
+		h.SSLForced = sslForced == 1
 		hosts = append(hosts, h)
 	}
 	return hosts, rows.Err()

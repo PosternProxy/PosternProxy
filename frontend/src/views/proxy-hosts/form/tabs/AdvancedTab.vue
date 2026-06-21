@@ -9,7 +9,8 @@ const { form } = useProxyHostForm()
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700"> Advanced Configuration </label>
       <p class="mb-2 text-xs text-slate-400">
-        Custom Caddy JSON snippet merged into this route's handler. Must be valid JSON.
+        Custom Caddy JSON object whose keys are merged into this host's route
+        (overriding generated fields). Must be a valid JSON object.
       </p>
       <textarea
         v-model="form.advanced_config"

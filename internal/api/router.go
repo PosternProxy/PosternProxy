@@ -37,6 +37,7 @@ type RouterConfig struct {
 	APITokenService        *services.APITokenService
 	JoinTokenService       *services.JoinTokenService
 	HealthService          *services.HealthService
+	TLSProbeService        *services.TLSProbeService
 	BackupService          *services.BackupService
 	ConfigHistoryService   *services.ConfigHistoryService
 	NginxImportService     *services.NginxImportService
@@ -88,7 +89,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	settingsHandler := handlers.NewSettingsHandler(cfg.SettingsService)
 	apiTokenHandler := handlers.NewAPITokenHandler(cfg.APITokenService)
 	joinTokenHandler := handlers.NewJoinTokenHandler(cfg.JoinTokenService, cfg.ServerService, cfg.SettingsService, cfg.AuditService)
-	healthHandler := handlers.NewHealthHandler(cfg.HealthService)
+	healthHandler := handlers.NewHealthHandler(cfg.HealthService, cfg.TLSProbeService)
 	backupHandler := handlers.NewBackupHandler(cfg.BackupService)
 	configHistoryHandler := handlers.NewConfigHistoryHandler(cfg.ConfigHistoryService)
 	nginxImportHandler := handlers.NewNginxImportHandler(cfg.NginxImportService)
@@ -175,6 +176,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Delete("/{id}", serverHandler.Delete)
 				r.Get("/{id}/status", serverHandler.Status)
 				r.Post("/{id}/resync", serverHandler.Resync)
+				r.Put("/{id}/http2", serverHandler.SetHTTP2)
 				r.Post("/{id}/provision", serverHandler.Reprovision)
 				r.Get("/{id}/provision-log", serverHandler.ProvisionLog)
 				r.Post("/{id}/join-token", joinTokenHandler.Issue)
@@ -194,6 +196,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			r.Route("/health", func(r chi.Router) {
 				r.Get("/upstreams", healthHandler.Upstreams)
+				r.Get("/tls", healthHandler.TLS)
 			})
 
 			r.Route("/dashboard", func(r chi.Router) {

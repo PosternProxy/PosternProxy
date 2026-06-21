@@ -24,7 +24,7 @@ internal/ui/dist/*.css
 # Root-level binaries produced by build.sh
 /posternproxy
 /posternproxy-agent
-
+bin/
 # Data
 data/
 *.db
@@ -58,3 +58,4 @@ tmp/
 
 # Internal/private docs
 docs/sales-email-template.md
+

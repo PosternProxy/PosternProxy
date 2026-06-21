@@ -13,10 +13,10 @@ Open `http://<server-ip>:81` in your browser.
 
 <!-- TODO: Screenshot — login page -->
 
-On first boot, PosternProxy generates a random admin password and prints it to the service logs. Retrieve it before logging in:
+On first boot, PosternProxy generates a random admin password and prints it to its log file. Retrieve it before logging in:
 
 ```bash
-journalctl -u posternproxy --no-pager | grep -A5 "INITIAL SETUP"
+grep -A6 "INITIAL SETUP" /var/log/posternproxy/posternproxy.log
 ```
 
 Log in with:
@@ -26,7 +26,8 @@ Log in with:
 Immediately navigate to **Users → (your account) → Change Password** and set a strong password.
 
 {{< hint info >}}
-**Can't find the password?** Run `posternproxy reset-password` on the server to generate and print a new one without restarting the service.
+**Can't find the password?** Run `reset-password` on the server (as the `posternproxy` user, with the config loaded) to generate and print a new one without restarting the service:
+`sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; /usr/local/bin/posternproxy reset-password'`
 {{< /hint >}}
 
 ## 2. Add your first proxy host
@@ -40,7 +41,9 @@ Proxy hosts route incoming domain traffic to upstream services.
    - **Forward Scheme** — `http` or `https` depending on your upstream
    - **Forward Hostname / IP** — the internal address of your service (e.g. `192.168.1.10`)
    - **Port** — the upstream port (e.g. `3000`)
-4. Click **SSL** tab and select a certificate (or leave blank for Caddy automatic Let's Encrypt)
+4. (Optional) Click the **SSL** tab:
+   - Leave **Force HTTPS** off to serve the host over plain HTTP immediately — useful for testing or internal domains with no public certificate.
+   - Turn **Force HTTPS** on to have Caddy obtain a Let's Encrypt certificate automatically (needs public DNS + port 80), or assign an uploaded certificate.
 5. Click **Create**
 
 <!-- TODO: Screenshot — Add Proxy Host modal, Details tab filled in -->
@@ -50,27 +53,30 @@ Caddy will immediately start routing traffic for your domain.
 ## 3. Verify traffic is flowing
 
 ```bash
+# Works right away when Force HTTPS is off:
+curl -I http://app.example.com
+# Once a certificate is provisioned (Force HTTPS on, DNS pointed):
 curl -I https://app.example.com
 ```
 
-You should see a `200 OK` (or whatever your upstream returns) along with Caddy-managed TLS.
+You should see a `200 OK` (or whatever your upstream returns).
 
 ## 4. Set up a certificate
 
-For domains Caddy cannot automatically obtain a Let's Encrypt certificate (e.g. wildcard domains), go to **Certificates → Add Certificate** and either:
-
-- Choose **Let's Encrypt DNS challenge** and enter your DNS provider credentials
-- Choose **Custom** and upload your own certificate and key files
+Public domains with Force HTTPS get a Let's Encrypt certificate automatically — no
+action needed here. For a wildcard or a private/internal domain, go to
+**Certificates → Add Certificate** and upload your own certificate and key, then
+select it on the host's SSL tab.
 
 See [Certificates]({{< relref "/certificates" >}}) for full details.
 
 ## 5. Restrict access with an access list
 
-To protect a proxy host with IP allowlisting or HTTP Basic Auth:
+To protect a proxy host with IP allowlisting:
 
 1. Go to **Access Lists → Add Access List**
-2. Add client IP rules (CIDR ranges) or authentication credentials
-3. Edit your proxy host and select the access list on the **SSL** tab
+2. Add client IP rules (CIDR ranges) with `allow` / `deny` directives
+3. Edit your proxy host and select the access list on the **Security** tab
 
 <!-- TODO: Screenshot — Access List form with client IP rules -->
 

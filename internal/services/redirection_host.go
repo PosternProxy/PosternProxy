@@ -136,7 +136,7 @@ func (s *RedirectionHostService) Create(ctx context.Context, callerID *int64, in
 		return nil, err
 	}
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push redirection host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to apply redirection host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "create", "redirection_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
 	return host, nil
@@ -168,7 +168,7 @@ func (s *RedirectionHostService) Update(ctx context.Context, callerID *int64, id
 
 	host, _ := s.GetByID(ctx, id)
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push redirection host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to apply redirection host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "update", "redirection_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
 	return host, nil
@@ -200,7 +200,7 @@ func (s *RedirectionHostService) SetEnabled(ctx context.Context, callerID *int64
 	}
 	if enabled {
 		if err := s.pushToCaddy(ctx, host); err != nil {
-			fmt.Printf("warning: failed to enable redirection host %d: %v\n", id, err)
+			log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to enable redirection host in Caddy")
 		}
 	} else {
 		s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
@@ -214,35 +214,36 @@ func (s *RedirectionHostService) SetEnabled(ctx context.Context, callerID *int64
 }
 
 func (s *RedirectionHostService) pushToCaddy(ctx context.Context, h *models.RedirectionHost) error {
-	if h.ServerID != 1 {
-		if s.sync != nil {
-			return s.sync.SyncServer(ctx, h.ServerID)
+	if s.sync == nil {
+		return nil
+	}
+	// Remote, or local-but-not-SSL-forced (served on both :80 and :443) can't be
+	// expressed as one incremental :443 patch — rebuild the full config. Only a
+	// local SSL-forced redirect is a single :443 route we can patch in place.
+	if h.ServerID != 1 || !h.SSLForced {
+		return s.sync.SyncServer(ctx, h.ServerID)
+	}
+	return s.sync.applyLocalOrResync(ctx, func() error {
+		route, err := caddy.BuildRedirectionHostRoute(h)
+		if err != nil {
+			return fmt.Errorf("build route: %w", err)
 		}
-		return nil
-	}
-	route, err := caddy.BuildRedirectionHostRoute(h)
-	if err != nil {
-		return fmt.Errorf("build route: %w", err)
-	}
-	if err := s.caddy.PatchPath("apps/http/servers/https/routes/id/"+h.CaddyID, route); err == nil {
-		return nil
-	}
-	return s.caddy.AppendToArray("apps/http/servers/https/routes", route)
+		if err := s.caddy.PatchPath("apps/http/servers/https/routes/id/"+h.CaddyID, route); err == nil {
+			return nil
+		}
+		return s.caddy.AppendToArray("apps/http/servers/https/routes", route)
+	})
 }
 
-func (s *RedirectionHostService) syncAfterDelete(ctx context.Context, serverID int64, caddyID string) {
-	if serverID != 1 {
-		if s.sync != nil {
-			if err := s.sync.SyncServer(ctx, serverID); err != nil {
-				log.Warn().Err(err).Int64("server_id", serverID).Msg("redirection host: sync after delete failed")
-			}
-		}
+// syncAfterDelete rebuilds the full config from the post-change DB state. A
+// redirect can live on both the :80 and :443 servers, so a delete-by-@id can't
+// reliably remove it; a full resync is correct and simple.
+func (s *RedirectionHostService) syncAfterDelete(ctx context.Context, serverID int64, _ string) {
+	if s.sync == nil {
 		return
 	}
-	if caddyID != "" {
-		if err := s.caddy.DeletePath("id/" + caddyID); err != nil {
-			log.Warn().Err(err).Str("caddy_id", caddyID).Msg("redirection host: caddy route deletion failed")
-		}
+	if err := s.sync.SyncServer(ctx, serverID); err != nil {
+		log.Warn().Err(err).Int64("server_id", serverID).Msg("redirection host: sync after delete failed")
 	}
 }
 

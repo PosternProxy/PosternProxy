@@ -11,8 +11,6 @@ export interface CreateProxyHostInput {
   ssl_forced?: boolean
   hsts_enabled?: boolean
   hsts_subdomains?: boolean
-  http2_support?: boolean
-  websocket_support?: boolean
   certificate_id?: number | null
   access_list_id?: number | null
   advanced_config?: string

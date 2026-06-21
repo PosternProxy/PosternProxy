@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { ProxyHost, AccessList, Certificate, UpstreamHealth } from '@/types'
+import { useRoute, useRouter } from 'vue-router'
+import type { ProxyHost, AccessList, Certificate, UpstreamHealth, TLSProbeStatus } from '@/types'
 import {
   listProxyHosts,
   deleteProxyHost,
@@ -9,7 +10,7 @@ import {
 } from '@/api/proxyHosts'
 import { listAccessLists } from '@/api/accessLists'
 import { listCertificates } from '@/api/certificates'
-import { getUpstreamHealth } from '@/api/health'
+import { getUpstreamHealth, getTLSStatus } from '@/api/health'
 import { useServerStore } from '@/stores/servers'
 import { useServerContext } from '@/stores/serverContext'
 import ConfigHistoryModal from '@/components/ConfigHistoryModal.vue'
@@ -19,6 +20,8 @@ import ProxyHostFormModal from './ProxyHostFormModal.vue'
 
 const serverStore = useServerStore()
 const ctx = useServerContext()
+const route = useRoute()
+const router = useRouter()
 
 // ── Hosts list + delete-confirm via composable ───────────────────────────────
 
@@ -74,6 +77,16 @@ const healthMap = computed(() => {
   return m
 })
 
+const tlsStatuses = ref<TLSProbeStatus[]>([])
+
+const tlsMap = computed(() => {
+  const m = new Map<number, TLSProbeStatus>()
+  for (const t of tlsStatuses.value) {
+    m.set(t.host_id, t)
+  }
+  return m
+})
+
 async function fetchHealth() {
   try {
     upstreamHealth.value = await getUpstreamHealth()
@@ -82,12 +95,64 @@ async function fetchHealth() {
   }
 }
 
+async function fetchTLS() {
+  try {
+    tlsStatuses.value = await getTLSStatus()
+  } catch {
+    /* non-fatal — Caddy might not be running */
+  }
+}
+
+function tlsFor(host: ProxyHost): TLSProbeStatus | undefined {
+  return tlsMap.value.get(host.id)
+}
+
+function tlsLabel(host: ProxyHost): string {
+  const t = tlsFor(host)
+  if (!t) return ''
+  if (t.status === 'valid') return 'TLS OK'
+  if (t.status === 'pending') return 'TLS pending'
+  return 'TLS failed'
+}
+
+function upstreamFor(host: ProxyHost): UpstreamHealth {
+  return (
+    healthMap.value.get(`${host.forward_host}:${host.forward_port}`) ?? {
+      address: `${host.forward_host}:${host.forward_port}`,
+      status: 'unknown',
+      num_requests: 0,
+      fails: 0,
+      checked_at: '',
+    }
+  )
+}
+
+function upstreamLabel(host: ProxyHost): string {
+  const u = upstreamFor(host)
+  if (u.status === 'healthy') return 'Healthy'
+  if (u.status === 'unhealthy') return `${u.fails} fail${u.fails === 1 ? '' : 's'}`
+  return 'No data'
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
   await serverStore.ensureLoaded()
-  await Promise.all([fetchHosts(), fetchAccessLists(), fetchCertificates(), fetchHealth()])
-  healthTimer = setInterval(fetchHealth, 30_000)
+  await Promise.all([
+    fetchHosts(),
+    fetchAccessLists(),
+    fetchCertificates(),
+    fetchHealth(),
+    fetchTLS(),
+  ])
+  if (route.query.create === '1') {
+    openCreate()
+    await router.replace({ name: 'proxy-hosts' })
+  }
+  healthTimer = setInterval(() => {
+    fetchHealth()
+    fetchTLS()
+  }, 30_000)
 })
 
 onUnmounted(() => {
@@ -254,25 +319,22 @@ function openHistory(host: ProxyHost) {
                 <template v-if="healthMap.has(`${host.forward_host}:${host.forward_port}`)">
                   <span
                     class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
-                    :class="
-                      healthMap.get(`${host.forward_host}:${host.forward_port}`)!.healthy
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : 'bg-red-100 text-red-700'
-                    "
+                    :class="{
+                      'bg-emerald-100 text-emerald-700':
+                        upstreamFor(host).status === 'healthy',
+                      'bg-red-100 text-red-700': upstreamFor(host).status === 'unhealthy',
+                      'bg-slate-100 text-slate-600': upstreamFor(host).status === 'unknown',
+                    }"
                   >
                     <span
                       class="h-1.5 w-1.5 rounded-full"
-                      :class="
-                        healthMap.get(`${host.forward_host}:${host.forward_port}`)!.healthy
-                          ? 'bg-emerald-500'
-                          : 'bg-red-500'
-                      "
+                      :class="{
+                        'bg-emerald-500': upstreamFor(host).status === 'healthy',
+                        'bg-red-500': upstreamFor(host).status === 'unhealthy',
+                        'bg-slate-400': upstreamFor(host).status === 'unknown',
+                      }"
                     />
-                    {{
-                      healthMap.get(`${host.forward_host}:${host.forward_port}`)!.healthy
-                        ? 'Healthy'
-                        : `${healthMap.get(`${host.forward_host}:${host.forward_port}`)!.fails} fail${healthMap.get(`${host.forward_host}:${host.forward_port}`)!.fails === 1 ? '' : 's'}`
-                    }}
+                    {{ upstreamLabel(host) }}
                   </span>
                 </template>
                 <template v-else>
@@ -325,6 +387,29 @@ function openHistory(host: ProxyHost) {
                 class="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700"
                 >Auto</span
               >
+
+              <!-- Live TLS certificate status (probe of Caddy's :443 listener) -->
+              <div v-if="tlsFor(host)" class="mt-1">
+                <span
+                  class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="{
+                    'bg-emerald-100 text-emerald-700': tlsFor(host)!.status === 'valid',
+                    'bg-amber-100 text-amber-700': tlsFor(host)!.status === 'pending',
+                    'bg-red-100 text-red-700': tlsFor(host)!.status === 'failed',
+                  }"
+                  :title="tlsFor(host)!.detail || ''"
+                >
+                  <span
+                    class="h-1.5 w-1.5 rounded-full"
+                    :class="{
+                      'bg-emerald-500': tlsFor(host)!.status === 'valid',
+                      'bg-amber-400 animate-pulse': tlsFor(host)!.status === 'pending',
+                      'bg-red-500 animate-pulse': tlsFor(host)!.status === 'failed',
+                    }"
+                  />
+                  {{ tlsLabel(host) }}
+                </span>
+              </div>
             </td>
 
             <!-- Status toggle -->
@@ -342,7 +427,7 @@ function openHistory(host: ProxyHost) {
                   class="h-1.5 w-1.5 rounded-full"
                   :class="host.enabled ? 'bg-emerald-500' : 'bg-slate-400'"
                 />
-                {{ host.enabled ? 'Online' : 'Offline' }}
+                {{ host.enabled ? 'Enabled' : 'Disabled' }}
               </button>
             </td>
 

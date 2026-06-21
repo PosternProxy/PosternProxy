@@ -27,6 +27,7 @@ export interface Server {
   active_routes: number
   last_status_at: string | null
   deployment_type: 'systemd' | 'docker'
+  http2_enabled: boolean
 }
 
 export interface ProxyHost {
@@ -40,8 +41,6 @@ export interface ProxyHost {
   ssl_forced: boolean
   hsts_enabled: boolean
   hsts_subdomains: boolean
-  http2_support: boolean
-  websocket_support: boolean
   access_list_id?: number
   advanced_config: string
   locations: ProxyHostLocation[]
@@ -128,9 +127,22 @@ export interface ImportSummary {
   errors: string[]
 }
 
+export type TLSProbeState = 'valid' | 'pending' | 'failed'
+
+export interface TLSProbeStatus {
+  host_id: number
+  domain: string
+  status: TLSProbeState
+  detail?: string
+  expires_at?: string
+  checked_at: string
+}
+
+export type UpstreamStatus = 'healthy' | 'unhealthy' | 'unknown'
+
 export interface UpstreamHealth {
   address: string
-  healthy: boolean
+  status: UpstreamStatus
   num_requests: number
   fails: number
   checked_at: string

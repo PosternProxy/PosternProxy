@@ -64,21 +64,24 @@ docker compose -f docker-compose.agent.yml up -d
 
 The UI is at `http://<server-ip>:81`. On first boot a random admin password is printed to the container logs — check `docker logs posternproxy`.
 
-### Deploy from binary
+### Deploy from release binaries
 
 ```bash
-# 1. Build (requires Go 1.25+, Node 20+)
-bash scripts/build.sh
+# 1. Download posternproxy, posternproxy-agent, and caddy for your architecture
+#    from https://github.com/PosternProxy/PosternProxy/releases/
+#    (rename to the bare names if the assets carry a platform suffix)
 
-# 2. Copy to server
-scp posternproxy user@your-server:/tmp/
+# 2. Copy the binaries + install script into one directory on the server
+scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
 
 # 3. Install (as root)
 ssh root@your-server
-bash /path/to/scripts/install.sh
+bash /tmp/posternproxy/install.sh
 ```
 
-The install script builds Caddy with required plugins, creates system users, generates secrets, installs hardened systemd services, and configures UFW / fail2ban / unattended upgrades. After install the UI is at `http://<server-ip>:81`.
+The install script installs the shipped Caddy, creates system users, generates secrets, installs hardened systemd services, and configures UFW / fail2ban / unattended upgrades. After install the UI is at `http://<server-ip>:81`.
+
+Prefer to build it yourself? See [Full production build](#full-production-build-with-embedded-frontend) below, or the [Building from Source](docs/content/getting-started/building-from-source.md) guide.
 
 ---
 
@@ -176,6 +179,7 @@ bash scripts/build.sh
 
 ```powershell
 .\scripts\build.ps1
+.\scripts\build.ps1 -GoOS windows -GoArch amd64 # Windows .exe files
 .\scripts\build.ps1 -GoOS linux -GoArch arm64   # override target
 ```
 

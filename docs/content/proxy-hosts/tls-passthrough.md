@@ -36,7 +36,6 @@ Because TLS Passthrough bypasses Caddy's HTTP layer, the following features are 
 | Automatic Let's Encrypt | ✗ (upstream provides its own cert) |
 | HSTS / Force HTTPS | ✗ |
 | Access lists (IP rules) | ✗ (client IP is still visible at L4) |
-| HTTP Basic Auth | ✗ |
 | Rate limiting | ✗ |
 | Custom headers | ✗ |
 | Custom error pages | ✗ |

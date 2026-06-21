@@ -10,8 +10,8 @@ const { form } = useProxyHostForm()
       <p class="text-sm font-medium text-slate-700">Custom Error Pages</p>
       <p class="mt-1 text-xs text-slate-500">
         Enter custom HTML for specific HTTP error codes. When Caddy returns that error for this
-        host, your page is served instead of the default browser error. Leave blank to use Caddy's
-        built-in response.
+        host, your page is served instead of the default host-down page. Leave blank to use the
+        built-in PosternProxy response.
       </p>
     </div>
 
@@ -56,7 +56,7 @@ const { form } = useProxyHostForm()
 
     <div class="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
       <strong>Note:</strong> These pages fire when the upstream is unreachable (502) or overloaded
-      (503) — Caddy propagates those as server-level errors. Changes take effect on next save.
+      (503). They apply to both HTTP and HTTPS routes after the host is saved.
     </div>
   </div>
 </template>

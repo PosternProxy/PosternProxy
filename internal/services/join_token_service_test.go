@@ -159,7 +159,7 @@ func newServerSvcWithHub(t *testing.T, db *sql.DB) (*ServerService, *agent.Hub) 
 	tokens := NewAPITokenService(db)
 	hub := agent.NewHub(nil, nil)
 	var key [32]byte
-	return NewServerService(db, audit, hub, tokens, key, "", ""), hub
+	return NewServerService(db, audit, hub, tokens, nil, key, "", ""), hub
 }
 
 func TestServerService_ResetJoin_AgentOffline(t *testing.T) {

@@ -42,9 +42,8 @@ The **Add / Edit Proxy Host** modal has the following tabs:
 | Forward Scheme | `http` or `https` — protocol used to reach your upstream |
 | Forward Hostname / IP | Internal address of the service to proxy |
 | Port | Upstream port number |
-| Websocket Support | Enables `Upgrade` header pass-through |
-| Block Exploits | Adds Caddy request-blocking rules for common exploit patterns |
-| Cache Assets | *(UI label)* — sets `Cache-Control` on static asset responses |
+| Force HTTPS | Redirect HTTP to HTTPS (otherwise the host is served over HTTP) |
+| Access List | Restrict access by IP via an access list |
 
 ## Enable / disable
 

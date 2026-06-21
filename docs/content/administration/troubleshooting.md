@@ -37,6 +37,30 @@ Common causes:
 | `plugin not found: layer4` | Caddy built without L4 plugin | Rebuild Caddy with `--with github.com/mholt/caddy-l4` |
 | `failed to obtain certificate` | DNS not propagated or port 80 blocked | Check DNS and UFW |
 
+## UI and API errors
+
+### "missing CSRF token" (403) when saving
+
+You can log in and load pages, but any create/update/delete returns
+`403 {"error":"missing CSRF token"}`.
+
+**Cause:** cookies are flagged `Secure`, but you are accessing the UI over plain
+HTTP. Browsers refuse to store or send `Secure` cookies over HTTP, so the
+`csrf_token` cookie never reaches the server. Login still works because it uses
+a bearer token, not a cookie.
+
+**Fix:** either access the UI over HTTPS, or tell PosternProxy it is not behind
+TLS so cookies are not marked `Secure`:
+
+```bash
+echo 'POSTERNPROXY_BEHIND_TLS_PROXY=false' >> /etc/posternproxy/config.env
+systemctl restart posternproxy
+```
+
+Then clear the site's cookies (or hard-refresh) so a fresh, non-`Secure`
+`csrf_token` is issued. Set the variable back to `true` once you put TLS in
+front of the UI.
+
 ## Traffic not routing
 
 ### Proxy host created but getting connection refused
@@ -67,10 +91,10 @@ If health checks are configured, check the upstream health widget on the Dashboa
 
 ### Getting wrong certificate / TLS error
 
-1. Check which certificate is assigned to the proxy host (SSL tab)
-2. If using automatic Let's Encrypt, verify the domain resolves to this server: `dig +short <domain>`
-3. Check Caddy's certificate status: `curl http://localhost:2019/pki/ca/local`
-4. Force a cert renewal from the Certificates page
+1. Check which certificate is assigned to the proxy host (SSL tab), or whether Force HTTPS is on
+2. If using automatic Let's Encrypt, verify the domain resolves to this server: `dig +short <domain>` and that port 80 is reachable from the internet
+3. Check the live TLS status on the Proxy Hosts list (OK / pending / failed). Caddy retries provisioning automatically — once DNS/port 80 are correct it flips to OK on its own
+4. Inspect Caddy's certificate activity: `journalctl -u caddy | grep -i tls`
 
 ## Management UI issues
 

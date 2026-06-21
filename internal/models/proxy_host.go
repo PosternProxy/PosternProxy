@@ -15,8 +15,6 @@ type ProxyHost struct {
 	SSLForced        bool            `json:"ssl_forced"`
 	HSTSEnabled      bool            `json:"hsts_enabled"`
 	HSTSSubdomains   bool            `json:"hsts_subdomains"`
-	HTTP2Support     bool            `json:"http2_support"`
-	WebsocketSupport bool            `json:"websocket_support"`
 	AccessListID     *int64          `json:"access_list_id"`
 	AdvancedConfig   string          `json:"advanced_config"`
 	Locations        json.RawMessage `json:"locations"`
@@ -103,8 +101,6 @@ type CreateProxyHostInput struct {
 	SSLForced        bool            `json:"ssl_forced"`
 	HSTSEnabled      bool            `json:"hsts_enabled"`
 	HSTSSubdomains   bool            `json:"hsts_subdomains"`
-	HTTP2Support     bool            `json:"http2_support"`
-	WebsocketSupport bool            `json:"websocket_support"`
 	AccessListID     *int64          `json:"access_list_id"`
 	AdvancedConfig   string          `json:"advanced_config"`
 	Locations        json.RawMessage `json:"locations"`

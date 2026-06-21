@@ -132,7 +132,7 @@ func (s *StreamHostService) Create(ctx context.Context, callerID *int64, input C
 		return nil, err
 	}
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push stream host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to apply stream host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "create", "stream_host", &id, map[string]any{"incoming_port": input.IncomingPort}, ip)
 	return host, nil
@@ -161,7 +161,7 @@ func (s *StreamHostService) Update(ctx context.Context, callerID *int64, id int6
 
 	host, _ := s.GetByID(ctx, id)
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push stream host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to apply stream host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "update", "stream_host", &id, map[string]any{"incoming_port": input.IncomingPort}, ip)
 	return host, nil
@@ -196,7 +196,7 @@ func (s *StreamHostService) SetEnabled(ctx context.Context, callerID *int64, id 
 	l4Key := caddy.StreamServerKey(host)
 	if enabled {
 		if err := s.pushToCaddy(ctx, host); err != nil {
-			fmt.Printf("warning: failed to enable stream host %d: %v\n", id, err)
+			log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to enable stream host in Caddy")
 		}
 	} else {
 		s.syncAfterDelete(ctx, host.ServerID, l4Key)
@@ -210,18 +210,20 @@ func (s *StreamHostService) SetEnabled(ctx context.Context, callerID *int64, id 
 }
 
 func (s *StreamHostService) pushToCaddy(ctx context.Context, h *models.StreamHost) error {
-	if h.ServerID != 1 {
-		if s.sync != nil {
-			return s.sync.SyncServer(ctx, h.ServerID)
-		}
+	if s.sync == nil {
 		return nil
 	}
-	srv := caddy.BuildStreamServer(h)
-	key := caddy.StreamServerKey(h)
-	if err := s.caddy.SetPath("apps/layer4/servers/"+key, srv); err != nil {
-		return fmt.Errorf("set layer4 server: %w", err)
+	if h.ServerID != 1 {
+		return s.sync.SyncServer(ctx, h.ServerID)
 	}
-	return nil
+	return s.sync.applyLocalOrResync(ctx, func() error {
+		srv := caddy.BuildStreamServer(h)
+		key := caddy.StreamServerKey(h)
+		if err := s.caddy.SetPath("apps/layer4/servers/"+key, srv); err != nil {
+			return fmt.Errorf("set layer4 server: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *StreamHostService) syncAfterDelete(ctx context.Context, serverID int64, l4Key string) {

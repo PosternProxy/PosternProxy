@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/posternproxy/posternproxy/internal/auth"
 )
@@ -13,9 +14,22 @@ type errorResponse struct {
 }
 
 func respondJSON(w http.ResponseWriter, status int, v any) {
+	v = normalizeJSONValue(v)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func normalizeJSONValue(v any) any {
+	if v == nil {
+		return v
+	}
+
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice && rv.IsNil() {
+		return reflect.MakeSlice(rv.Type(), 0, 0).Interface()
+	}
+	return v
 }
 
 // RespondJSON is the exported form of respondJSON for use outside the handlers package.

@@ -35,7 +35,7 @@ export function createResourceClient<T, CreateInput, UpdateInput = CreateInput>(
   return {
     async list(params) {
       const { data } = await client.get<T[]>(basePath, params ? { params } : undefined)
-      return data
+      return Array.isArray(data) ? data : []
     },
     async get(id) {
       const { data } = await client.get<T>(`${basePath}/${id}`)

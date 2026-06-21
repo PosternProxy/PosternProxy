@@ -84,6 +84,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	certSvc := services.NewCertificateService(db, cfg.CertDir, auditSvc)
 	portForwardSvc := services.NewPortForwardService(db, auditSvc)
 	healthSvc := services.NewHealthService(caddyClient)
+	tlsProbeSvc := services.NewTLSProbeService(db, "127.0.0.1:443")
 	historySvc := services.NewConfigHistoryService(db)
 
 	// Agent hub — constructed before CaddySyncService so the onConnect
@@ -111,7 +112,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		},
 	)
 
-	caddySyncSvc = services.NewCaddySyncService(db, caddyClient, hub)
+	caddySyncSvc = services.NewCaddySyncService(db, caddyClient, hub, cfg.Version)
 
 	// Host services route remote-server mutations through the hub via
 	// caddySyncSvc rather than the local Caddy admin API.
@@ -121,19 +122,19 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	streamHostSvc := services.NewStreamHostService(db, caddyClient, auditSvc, caddySyncSvc)
 
 	backupSvc := services.NewBackupService(db, caddySyncSvc)
-	serverSvc = services.NewServerService(db, auditSvc, hub, tokenSvc, cfg.EncryptionKey, cfg.ControllerURL, cfg.AgentBinPath)
+	serverSvc = services.NewServerService(db, auditSvc, hub, tokenSvc, caddyClient, cfg.EncryptionKey, cfg.ControllerURL, cfg.AgentBinPath)
 	nginxImportSvc := services.NewNginxImportService(proxyHostSvc, redirectionHostSvc)
 
 	registerRollbackHandlers(historySvc, proxyHostSvc)
 
 	// ── Initial Caddy sync ────────────────────────────────────────────────
-	// Non-fatal: on first boot Caddy may not be running yet.
+	// Caddy may still be starting when the controller boots (systemd orders us
+	// after caddy.service but does not wait for its admin API). A single attempt
+	// that loses that race used to leave Caddy running its empty default config
+	// with no retry, so nothing was ever proxied. Retry in the background until
+	// it succeeds.
 	log.Info().Str("caddy_api", cfg.CaddyAPI).Msg("syncing Caddy configuration")
-	if err := caddySyncSvc.FullSync(ctx); err != nil {
-		log.Warn().Err(err).Msg("initial Caddy sync failed (Caddy may not be running yet)")
-	} else {
-		log.Info().Msg("Caddy configuration synced")
-	}
+	go syncCaddyWithRetry(ctx, caddySyncSvc)
 
 	// ── Port forwards lost on reboot — restore them ──────────────────────
 	log.Info().Msg("restoring port forwarding rules")
@@ -141,6 +142,9 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 
 	// ── Background upstream health polling ────────────────────────────────
 	healthSvc.Start(30 * time.Second)
+
+	// ── Background TLS certificate probing ────────────────────────────────
+	tlsProbeSvc.Start(60 * time.Second)
 
 	// ── Background purge of expired join tokens ───────────────────────────
 	go func() {
@@ -177,6 +181,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		APITokenService:        tokenSvc,
 		JoinTokenService:       joinTokenSvc,
 		HealthService:          healthSvc,
+		TLSProbeService:        tlsProbeSvc,
 		BackupService:          backupSvc,
 		ConfigHistoryService:   historySvc,
 		NginxImportService:     nginxImportSvc,
@@ -206,6 +211,33 @@ func (a *App) Close() error {
 	return nil
 }
 
+// syncCaddyWithRetry pushes the full config to Caddy, retrying with a capped
+// backoff until it succeeds or ctx is cancelled. The first attempt is immediate
+// so a healthy boot syncs without delay.
+func syncCaddyWithRetry(ctx context.Context, sync *services.CaddySyncService) {
+	const maxDelay = 30 * time.Second
+	delay := 1 * time.Second
+	for {
+		if err := sync.FullSync(ctx); err != nil {
+			log.Warn().Err(err).Dur("retry_in", delay).Msg("Caddy sync failed (Caddy may not be ready yet); will retry")
+		} else {
+			log.Info().Msg("Caddy configuration synced")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		if delay < maxDelay {
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+	}
+}
+
 // registerRollbackHandlers wires every resource-rollback handler the
 // config-history service needs. Adding a new rollback-capable resource means
 // adding a case here.
@@ -220,7 +252,6 @@ func registerRollbackHandlers(historySvc *services.ConfigHistoryService, proxyHo
 			ForwardHost: h.ForwardHost, ForwardPort: h.ForwardPort,
 			CertificateID: h.CertificateID, SSLForced: h.SSLForced,
 			HSTSEnabled: h.HSTSEnabled, HSTSSubdomains: h.HSTSSubdomains,
-			HTTP2Support: h.HTTP2Support, WebsocketSupport: h.WebsocketSupport,
 			AccessListID:   h.AccessListID,
 			AdvancedConfig: h.AdvancedConfig, Locations: h.Locations,
 			HCEnabled: h.HCEnabled, HCActivePath: h.HCActivePath,

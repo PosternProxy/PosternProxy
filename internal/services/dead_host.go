@@ -117,7 +117,7 @@ func (s *DeadHostService) Create(ctx context.Context, callerID *int64, input Cre
 		return nil, err
 	}
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push dead host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to apply dead host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "create", "dead_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
 	return host, nil
@@ -143,7 +143,7 @@ func (s *DeadHostService) Update(ctx context.Context, callerID *int64, id int64,
 
 	host, _ := s.GetByID(ctx, id)
 	if err := s.pushToCaddy(ctx, host); err != nil {
-		fmt.Printf("warning: failed to push dead host %d to caddy: %v\n", id, err)
+		log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to apply dead host to Caddy")
 	}
 	s.audit.Log(ctx, callerID, "update", "dead_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
 	return host, nil
@@ -175,7 +175,7 @@ func (s *DeadHostService) SetEnabled(ctx context.Context, callerID *int64, id in
 	}
 	if enabled {
 		if err := s.pushToCaddy(ctx, host); err != nil {
-			fmt.Printf("warning: failed to enable dead host %d: %v\n", id, err)
+			log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to enable dead host in Caddy")
 		}
 	} else {
 		s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
@@ -188,36 +188,21 @@ func (s *DeadHostService) SetEnabled(ctx context.Context, callerID *int64, id in
 	return nil
 }
 
+// pushToCaddy rebuilds the full config. Dead hosts are served on both the :80 and
+// :443 servers, so a single :443 patch can't represent them.
 func (s *DeadHostService) pushToCaddy(ctx context.Context, h *models.DeadHost) error {
-	if h.ServerID != 1 {
-		if s.sync != nil {
-			return s.sync.SyncServer(ctx, h.ServerID)
-		}
+	if s.sync == nil {
 		return nil
 	}
-	route, err := caddy.BuildDeadHostRoute(h)
-	if err != nil {
-		return fmt.Errorf("build route: %w", err)
-	}
-	if err := s.caddy.PatchPath("apps/http/servers/https/routes/id/"+h.CaddyID, route); err == nil {
-		return nil
-	}
-	return s.caddy.AppendToArray("apps/http/servers/https/routes", route)
+	return s.sync.SyncServer(ctx, h.ServerID)
 }
 
-func (s *DeadHostService) syncAfterDelete(ctx context.Context, serverID int64, caddyID string) {
-	if serverID != 1 {
-		if s.sync != nil {
-			if err := s.sync.SyncServer(ctx, serverID); err != nil {
-				log.Warn().Err(err).Int64("server_id", serverID).Msg("dead host: sync after delete failed")
-			}
-		}
+func (s *DeadHostService) syncAfterDelete(ctx context.Context, serverID int64, _ string) {
+	if s.sync == nil {
 		return
 	}
-	if caddyID != "" {
-		if err := s.caddy.DeletePath("id/" + caddyID); err != nil {
-			log.Warn().Err(err).Str("caddy_id", caddyID).Msg("dead host: caddy route deletion failed")
-		}
+	if err := s.sync.SyncServer(ctx, serverID); err != nil {
+		log.Warn().Err(err).Int64("server_id", serverID).Msg("dead host: sync after delete failed")
 	}
 }
 

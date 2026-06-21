@@ -26,6 +26,12 @@ client.interceptors.response.use(
   async (error) => {
     if (error.response?.status === 401) {
       const auth = useAuthStore()
+      const requestURL = error.config?.url ?? ''
+      if (requestURL.endsWith('/auth/refresh')) {
+        auth.clearSession()
+        router.push('/login')
+        return Promise.reject(error)
+      }
       try {
         const { data } = await axios.post('/api/auth/refresh')
         auth.setToken(data.access_token)
@@ -41,7 +47,7 @@ client.interceptors.response.use(
         }
         return client.request(error.config)
       } catch {
-        auth.logout()
+        auth.clearSession()
         router.push('/login')
       }
     }

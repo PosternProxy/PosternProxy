@@ -28,8 +28,9 @@ async function fetchHealth() {
   }
 }
 
-const healthyCount = computed(() => upstreams.value.filter((u) => u.healthy).length)
-const unhealthyCount = computed(() => upstreams.value.filter((u) => !u.healthy).length)
+const healthyCount = computed(() => upstreams.value.filter((u) => u.status === 'healthy').length)
+const unhealthyCount = computed(() => upstreams.value.filter((u) => u.status === 'unhealthy').length)
+const unknownCount = computed(() => upstreams.value.filter((u) => u.status === 'unknown').length)
 
 const lastUpdatedLabel = computed(() => {
   if (!healthLastUpdated.value) return ''
@@ -178,6 +179,7 @@ const colorMap: Record<string, string> = {
             <!-- live summary pills -->
             <template v-if="upstreams.length > 0">
               <span
+                v-if="healthyCount > 0"
                 class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
               >
                 {{ healthyCount }} healthy
@@ -187,6 +189,12 @@ const colorMap: Record<string, string> = {
                 class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
               >
                 {{ unhealthyCount }} down
+              </span>
+              <span
+                v-if="unknownCount > 0"
+                class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+              >
+                {{ unknownCount }} no data
               </span>
             </template>
           </div>
@@ -265,7 +273,7 @@ const colorMap: Record<string, string> = {
               v-for="u in upstreams"
               :key="u.address"
               class="transition-colors"
-              :class="u.healthy ? 'hover:bg-slate-50' : 'bg-red-50/60 hover:bg-red-50'"
+              :class="u.status === 'unhealthy' ? 'bg-red-50/60 hover:bg-red-50' : 'hover:bg-slate-50'"
             >
               <!-- Address -->
               <td class="px-5 py-3 font-mono text-xs text-slate-700">{{ u.address }}</td>
@@ -274,13 +282,27 @@ const colorMap: Record<string, string> = {
               <td class="px-5 py-3">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-                  :class="u.healthy ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'"
+                  :class="{
+                    'bg-emerald-100 text-emerald-700': u.status === 'healthy',
+                    'bg-red-100 text-red-700': u.status === 'unhealthy',
+                    'bg-slate-100 text-slate-600': u.status === 'unknown',
+                  }"
                 >
                   <span
                     class="h-1.5 w-1.5 rounded-full"
-                    :class="u.healthy ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'"
+                    :class="{
+                      'bg-emerald-500': u.status === 'healthy',
+                      'bg-red-500 animate-pulse': u.status === 'unhealthy',
+                      'bg-slate-400': u.status === 'unknown',
+                    }"
                   />
-                  {{ u.healthy ? 'Healthy' : 'Unhealthy' }}
+                  {{
+                    u.status === 'healthy'
+                      ? 'Healthy'
+                      : u.status === 'unhealthy'
+                        ? 'Unhealthy'
+                        : 'No data'
+                  }}
                 </span>
               </td>
 
@@ -300,21 +322,29 @@ const colorMap: Record<string, string> = {
           </tbody>
         </table>
 
-        <!-- All healthy footer -->
+        <!-- Unhealthy footer -->
         <div
-          v-if="upstreams.length > 0 && unhealthyCount === 0"
+          v-if="upstreams.length > 0 && unhealthyCount > 0"
+          class="border-t border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700"
+        >
+          ⚠ {{ unhealthyCount }} upstream{{ unhealthyCount !== 1 ? 's are' : ' is' }} unhealthy —
+          Caddy is routing around them
+        </div>
+        <!-- All healthy footer (only when every upstream has a positive signal) -->
+        <div
+          v-else-if="upstreams.length > 0 && unknownCount === 0"
           class="border-t border-slate-100 px-5 py-2 text-xs text-emerald-600"
         >
           ✓ All {{ upstreams.length }} upstream{{ upstreams.length !== 1 ? 's' : '' }} healthy —
           polled every 30 s
         </div>
-        <!-- Unhealthy footer -->
+        <!-- No-data footer: upstreams exist but none has served traffic yet -->
         <div
-          v-else-if="upstreams.length > 0 && unhealthyCount > 0"
-          class="border-t border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700"
+          v-else-if="upstreams.length > 0"
+          class="border-t border-slate-100 px-5 py-2 text-xs text-slate-500"
         >
-          ⚠ {{ unhealthyCount }} upstream{{ unhealthyCount !== 1 ? 's are' : ' is' }} unhealthy —
-          Caddy is routing around them
+          {{ unknownCount }} upstream{{ unknownCount !== 1 ? 's have' : ' has' }} no observed traffic
+          yet — status is unknown until requests flow or active health checks are enabled.
         </div>
       </div>
 
@@ -368,7 +398,7 @@ const colorMap: Record<string, string> = {
         <p class="mt-1 text-xs text-slate-400">Get started by adding a proxy host.</p>
         <button
           class="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-          @click="router.push('/proxy-hosts')"
+          @click="router.push({ name: 'proxy-hosts', query: { create: '1' } })"
         >
           Add Proxy Host
         </button>

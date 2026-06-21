@@ -32,6 +32,12 @@ export async function resyncServer(id: number): Promise<void> {
   await client.post(`/servers/${id}/resync`)
 }
 
+/** Toggles the server-wide HTTP/2 setting and re-syncs Caddy. Returns the updated server. */
+export async function setServerHTTP2(id: number, enabled: boolean): Promise<Server> {
+  const { data } = await client.put<Server>(`/servers/${id}/http2`, { enabled })
+  return data
+}
+
 /** Opens a native EventSource stream to /api/servers/{id}/provision-log */
 export function openProvisionLog(id: number): EventSource {
   // EventSource doesn't send auth headers, so we need the access token in the URL

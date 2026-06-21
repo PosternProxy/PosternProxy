@@ -12,14 +12,32 @@ DATA_DIR="/var/lib/posternproxy"
 CONF_DIR="/etc/posternproxy"
 CERT_DIR="${DATA_DIR}/certs"
 LOG_DIR="/var/log/posternproxy"
+CADDY_DATA_DIR="/var/lib/caddy"  # Caddy XDG storage (ACME certs, autosave config)
 SERVICE_USER="posternproxy"
 CADDY_USER="caddy"
 LISTEN_PORT="81"
 CADDY_ADMIN="http://localhost:2019"
 
-# Detect binary path (same directory as this script, or download)
+# Locate the controller binary. Accept the common layouts so the docs can keep
+# the upload step simple: next to this script, one directory above it (repo
+# layout: scripts/install.sh + ./posternproxy), or the current directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY="${SCRIPT_DIR}/../posternproxy"
+find_binary() {
+    local name="$1" candidate
+    for candidate in \
+        "${SCRIPT_DIR}/${name}" \
+        "${SCRIPT_DIR}/../${name}" \
+        "${PWD}/${name}"; do
+        if [[ -f "${candidate}" ]]; then
+            echo "$(cd "$(dirname "${candidate}")" && pwd)/$(basename "${candidate}")"
+            return 0
+        fi
+    done
+    return 1
+}
+BINARY="$(find_binary posternproxy || true)"
+AGENT_BINARY="$(find_binary posternproxy-agent || true)"
+CADDY_BINARY="$(find_binary caddy || true)"
 
 ###############################################################################
 # HELPERS
@@ -46,16 +64,28 @@ info "Updating package index..."
 apt-get update -qq
 
 info "Installing dependencies..."
+# Note: do NOT add iptables-persistent here. It conflicts with ufw
+# ("ufw Breaks iptables-persistent") on Debian/Ubuntu. UFW, configured below,
+# persists its own ruleset across reboots, so the extra package is redundant.
 apt-get install -y -qq \
-    curl wget git gnupg2 lsb-release \
+    curl wget gnupg2 lsb-release \
     ufw fail2ban unattended-upgrades apt-listchanges \
-    iptables iptables-persistent socat \
+    iptables socat \
     ca-certificates
 
 ###############################################################################
 # INSTALL CADDY (with L4 module via xcaddy)
 ###############################################################################
-if ! command -v caddy &>/dev/null; then
+if [[ -n "${CADDY_BINARY}" && -f "${CADDY_BINARY}" ]]; then
+    info "Installing prebuilt Caddy from ${CADDY_BINARY}..."
+    install -m 755 -o root -g root "${CADDY_BINARY}" /usr/bin/caddy
+    info "Caddy installed: $(/usr/bin/caddy version)"
+elif command -v caddy &>/dev/null; then
+    info "Caddy already installed: $(caddy version)"
+else
+    warn "No prebuilt Caddy binary was shipped; building Caddy from source on this server."
+    warn "This installs the Go toolchain here. To avoid it, run scripts/build.sh on your"
+    warn "build machine and copy the resulting 'caddy' binary alongside this script."
     info "Building Caddy with L4 module..."
 
     # Install Go if needed
@@ -92,8 +122,6 @@ if ! command -v caddy &>/dev/null; then
 
     chmod +x /usr/bin/caddy
     info "Caddy built: $(/usr/bin/caddy version)"
-else
-    info "Caddy already installed: $(caddy version)"
 fi
 
 ###############################################################################
@@ -120,14 +148,31 @@ chmod 700 "${CERT_DIR}"
 chown "${SERVICE_USER}:${SERVICE_USER}" "${CONF_DIR}"
 chmod 750 "${CONF_DIR}"
 
+# Caddy stores ACME certificates and its autosave config under its XDG data dir.
+# The caddy user has no home directory, so point XDG at a dir it owns (the
+# systemd unit below sets XDG_CONFIG_HOME/XDG_DATA_HOME to this path). Without
+# it, cert provisioning fails with "mkdir /home/caddy: permission denied".
+mkdir -p "${CADDY_DATA_DIR}"
+chown "${CADDY_USER}:${CADDY_USER}" "${CADDY_DATA_DIR}"
+chmod 700 "${CADDY_DATA_DIR}"
+
 ###############################################################################
 # INSTALL POSTERNPROXY BINARY
 ###############################################################################
-if [[ -f "${BINARY}" ]]; then
+if [[ -n "${BINARY}" && -f "${BINARY}" ]]; then
     info "Installing PosternProxy binary from ${BINARY}..."
     install -m 755 -o root -g root "${BINARY}" "${INSTALL_DIR}/posternproxy"
 else
-    die "PosternProxy binary not found at ${BINARY}. Build the project first."
+    die "PosternProxy binary not found. Build it with 'bash scripts/build.sh' and copy 'posternproxy' next to this script (or its parent directory)."
+fi
+
+# The agent binary is used to provision remote nodes. Install it if it was
+# copied alongside the controller; warn (don't fail) if it is missing.
+if [[ -n "${AGENT_BINARY}" && -f "${AGENT_BINARY}" ]]; then
+    info "Installing PosternProxy agent binary from ${AGENT_BINARY}..."
+    install -m 755 -o root -g root "${AGENT_BINARY}" "${INSTALL_DIR}/posternproxy-agent"
+else
+    warn "Agent binary 'posternproxy-agent' not found; skipping. Remote node provisioning will be unavailable until it is installed at ${INSTALL_DIR}/posternproxy-agent."
 fi
 
 ###############################################################################
@@ -147,6 +192,13 @@ POSTERNPROXY_CADDY_API=${CADDY_ADMIN}
 POSTERNPROXY_CERT_DIR=${CERT_DIR}
 POSTERNPROXY_CONTROLLER_URL=http://$(hostname -I | awk '{print $1}'):${LISTEN_PORT}
 POSTERNPROXY_AGENT_BIN_PATH=${INSTALL_DIR}/posternproxy-agent
+
+# The management UI is served over plain HTTP on port ${LISTEN_PORT} by default.
+# Keep this 'false' so session/CSRF cookies are NOT flagged Secure — browsers
+# drop Secure cookies over HTTP, which breaks CSRF-protected requests (you would
+# see "missing CSRF token" on every write). Set it to 'true' once a TLS-
+# terminating proxy fronts the UI and you access it over HTTPS.
+POSTERNPROXY_BEHIND_TLS_PROXY=false
 EOF
     chown "${SERVICE_USER}:${SERVICE_USER}" "${CONF_FILE}"
     chmod 600 "${CONF_FILE}"
@@ -170,6 +222,10 @@ Requires=network-online.target
 Type=notify
 User=caddy
 Group=caddy
+# The caddy user has no home dir; point XDG storage at a dir it owns so ACME
+# cert provisioning and config autosave work (created by the installer).
+Environment=XDG_CONFIG_HOME=/var/lib/caddy
+Environment=XDG_DATA_HOME=/var/lib/caddy
 ExecStart=/usr/bin/caddy run --environ
 ExecReload=/usr/bin/caddy reload --force
 TimeoutStopSec=5s
@@ -255,8 +311,12 @@ sysctl --system -q
 ###############################################################################
 # IPTABLES PERSISTENCE
 ###############################################################################
-info "Enabling iptables persistence..."
-netfilter-persistent save 2>/dev/null || true
+# UFW persists its own rules, so netfilter-persistent is not installed (it
+# conflicts with ufw). Only save here if it happens to already be present.
+if command -v netfilter-persistent &>/dev/null; then
+    info "Saving iptables rules via netfilter-persistent..."
+    netfilter-persistent save 2>/dev/null || true
+fi
 
 ###############################################################################
 # UFW FIREWALL
@@ -346,8 +406,8 @@ echo "  PosternProxy installed successfully!"
 echo ""
 echo "  UI:      http://${SERVER_IP}:${LISTEN_PORT}"
 echo "  Login:   admin@posternproxy.local"
-echo "  Password is printed in the service logs on first boot."
-echo "  View it with: journalctl -u posternproxy | grep password"
+echo "  Password is printed to the log on first boot."
+echo "  View it with: grep -A1 'Password:' ${LOG_DIR}/posternproxy.log"
 echo ""
 echo "  Change the password immediately after first login."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

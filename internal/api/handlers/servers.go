@@ -253,6 +253,43 @@ func (h *ServerHandler) Resync(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
+// SetHTTP2 toggles the server-wide HTTP/2 setting and re-syncs Caddy so it takes
+// effect. Body: {"enabled": bool}. Works for the local server too.
+func (h *ServerHandler) SetHTTP2(w http.ResponseWriter, r *http.Request) {
+	claims := requireClaims(w, r)
+	if claims == nil {
+		return
+	}
+	id, err := parseID(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.svc.SetHTTP2(r.Context(), &claims.UserID, id, body.Enabled, r.RemoteAddr); err != nil {
+		if errors.Is(err, services.ErrServerNotFound) {
+			respondError(w, http.StatusNotFound, "server not found")
+			return
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.sync.SyncServer(r.Context(), id); err != nil {
+		// The setting is saved; surface the apply failure so the user knows the
+		// change hasn't reached Caddy yet.
+		respondError(w, http.StatusBadGateway, "saved but failed to apply to Caddy: "+err.Error())
+		return
+	}
+	srv, _ := h.svc.GetByID(r.Context(), id)
+	respondJSON(w, http.StatusOK, srv)
+}
+
 // Status returns the real-time connectivity status of one server.
 func (h *ServerHandler) Status(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)

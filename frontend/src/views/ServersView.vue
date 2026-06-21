@@ -7,6 +7,7 @@ import {
   updateServer,
   deleteServer,
   resyncServer,
+  setServerHTTP2,
   type CreateServerInput,
 } from '@/api/servers'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
@@ -54,6 +55,26 @@ const editError = ref('')
 const resyncingId = ref<number | null>(null)
 const resyncSuccessId = ref<number | null>(null)
 const resyncError = ref('')
+
+// HTTP/2 toggle state
+const http2TogglingId = ref<number | null>(null)
+
+async function toggleHTTP2(srv: Server) {
+  http2TogglingId.value = srv.id
+  resyncError.value = ''
+  try {
+    const updated = await setServerHTTP2(srv.id, !srv.http2_enabled)
+    const idx = servers.value.findIndex((s) => s.id === srv.id)
+    if (idx >= 0) servers.value[idx] = updated
+  } catch (e: unknown) {
+    resyncError.value = e instanceof Error ? e.message : 'Failed to toggle HTTP/2'
+    setTimeout(() => {
+      resyncError.value = ''
+    }, 4000)
+  } finally {
+    http2TogglingId.value = null
+  }
+}
 
 // ── Form ──────────────────────────────────────────────────────────────────────
 
@@ -371,6 +392,26 @@ function formatUptime(seconds: number): string {
             </td>
             <td class="px-4 py-3 text-right">
               <div class="flex items-center justify-end gap-1.5">
+                <!-- HTTP/2 toggle (server-wide; available for local too) -->
+                <button
+                  class="rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40"
+                  :class="
+                    srv.http2_enabled
+                      ? 'text-emerald-700 hover:bg-emerald-50'
+                      : 'text-slate-500 hover:bg-slate-100'
+                  "
+                  :disabled="http2TogglingId === srv.id"
+                  :title="
+                    srv.http2_enabled
+                      ? 'HTTP/2 enabled for this server — click to disable'
+                      : 'HTTP/2 disabled for this server — click to enable'
+                  "
+                  @click="toggleHTTP2(srv)"
+                >
+                  <span v-if="http2TogglingId === srv.id">HTTP/2…</span>
+                  <span v-else>HTTP/2: {{ srv.http2_enabled ? 'On' : 'Off' }}</span>
+                </button>
+
                 <!-- Re-sync -->
                 <button
                   v-if="!srv.is_local"
@@ -415,7 +456,6 @@ function formatUptime(seconds: number): string {
                 >
                   Delete
                 </button>
-                <span v-if="srv.is_local" class="text-xs text-slate-400">—</span>
               </div>
             </td>
           </tr>
@@ -575,42 +615,15 @@ function formatUptime(seconds: number): string {
               </p>
             </div>
 
-            <!-- Deployment type -->
-            <div>
-              <label class="mb-2 block text-sm font-medium text-slate-700">Deployment</label>
-              <div class="flex gap-2">
-                <button
-                  v-for="m in [
-                    { value: 'systemd', label: 'Bare Metal (systemd)' },
-                    { value: 'docker', label: 'Docker Container' },
-                  ]"
-                  :key="m.value"
-                  class="rounded-lg border px-4 py-1.5 text-sm font-medium transition-colors"
-                  :class="
-                    form.deployment_type === m.value
-                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
-                  "
-                  @click="form.deployment_type = m.value as 'systemd' | 'docker'"
-                >
-                  {{ m.label }}
-                </button>
-              </div>
-            </div>
-
+            <!-- Deployment is systemd (bare metal) only for now. Docker
+                 provisioning isn't ready yet, so the choice is hidden and every
+                 remote server is provisioned via systemd (the form default). -->
             <div
               class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-700"
             >
-              <template v-if="form.deployment_type === 'systemd'">
-                <span class="font-medium">What happens next:</span> PosternProxy will SSH into the
-                server, install Caddy (with L4 module), deploy the agent binary, and configure
-                systemd + OS hardening. This takes 5–10 minutes depending on internet speed.
-              </template>
-              <template v-else>
-                <span class="font-medium">What happens next:</span> PosternProxy will SSH into the
-                server, install Docker if not already present, and start the agent as a container.
-                No build tools required — typically completes in under 2 minutes.
-              </template>
+              <span class="font-medium">What happens next:</span> PosternProxy will SSH into the
+              server, install Caddy (with L4 module), deploy the agent binary, and configure
+              systemd + OS hardening. This takes 5–10 minutes depending on internet speed.
             </div>
           </div>
 

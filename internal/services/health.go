@@ -7,10 +7,25 @@ import (
 	"github.com/posternproxy/posternproxy/internal/caddy"
 )
 
+// Upstream health states. Caddy's /reverse_proxy/upstreams endpoint reports
+// only observed request/failure counts, not reachability, so we cannot claim an
+// upstream is healthy without a positive signal:
+//   - "unhealthy": Caddy has recorded failures (passive health checks tripped).
+//   - "healthy":   requests have been served with zero recorded failures.
+//   - "unknown":   no traffic observed yet — we have no evidence either way.
+//
+// Reporting "unknown" instead of "healthy" for idle upstreams is deliberate: a
+// dead backend that has never been hit must not show green.
+const (
+	UpstreamHealthy   = "healthy"
+	UpstreamUnhealthy = "unhealthy"
+	UpstreamUnknown   = "unknown"
+)
+
 // UpstreamHealth is a point-in-time snapshot of one upstream's health.
 type UpstreamHealth struct {
 	Address     string    `json:"address"`
-	Healthy     bool      `json:"healthy"`
+	Status      string    `json:"status"`
 	NumRequests int       `json:"num_requests"`
 	Fails       int       `json:"fails"`
 	CheckedAt   time.Time `json:"checked_at"`
@@ -73,11 +88,25 @@ func (s *HealthService) poll() {
 	for _, u := range raw {
 		statuses = append(statuses, UpstreamHealth{
 			Address:     u.Address,
-			Healthy:     u.Fails == 0,
+			Status:      upstreamStatus(u.NumRequests, u.Fails),
 			NumRequests: u.NumRequests,
 			Fails:       u.Fails,
 			CheckedAt:   now,
 		})
 	}
 	s.statuses = statuses
+}
+
+// upstreamStatus maps Caddy's observed counters to a health state. Zero fails
+// alone is not evidence of health — it only means nothing has failed, which is
+// equally true of an upstream that has never been contacted.
+func upstreamStatus(numRequests, fails int) string {
+	switch {
+	case fails > 0:
+		return UpstreamUnhealthy
+	case numRequests > 0:
+		return UpstreamHealthy
+	default:
+		return UpstreamUnknown
+	}
 }

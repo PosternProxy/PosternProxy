@@ -1,6 +1,9 @@
 package caddy
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"maps"
+)
 
 // Config is the top-level Caddy JSON config structure.
 type Config struct {
@@ -23,6 +26,9 @@ type HTTPServer struct {
 	Routes         []*Route      `json:"routes,omitempty"`
 	Errors         *ServerErrors `json:"errors,omitempty"`
 	AutomaticHTTPS *AutoHTTPS    `json:"automatic_https,omitempty"`
+	// Protocols restricts the protocols the server offers, e.g. ["h1"] to disable
+	// HTTP/2 and HTTP/3. Omitted = Caddy default (h1, h2, h3).
+	Protocols []string `json:"protocols,omitempty"`
 }
 
 // ServerErrors holds custom error-handling routes for an HTTP server.
@@ -34,6 +40,11 @@ type ServerErrors struct {
 
 type AutoHTTPS struct {
 	Disable bool `json:"disable,omitempty"`
+	// DisableRedirects stops Caddy from auto-injecting HTTP→HTTPS redirect routes.
+	// We build the :80 server ourselves (direct-serve routes for non-SSL-forced
+	// hosts, plus an explicit redirect catch-all), so Caddy's automatic redirects
+	// would shadow the direct routes and force HTTPS on hosts that opted out.
+	DisableRedirects bool `json:"disable_redirects,omitempty"`
 }
 
 // Route is a single route entry.
@@ -42,6 +53,35 @@ type Route struct {
 	Match    []Matcher `json:"match,omitempty"`
 	Handle   []Handler `json:"handle"`
 	Terminal bool      `json:"terminal,omitempty"`
+
+	// Extra holds a user-supplied "advanced config" JSON object whose keys are
+	// shallow-merged over the generated route at marshal time (see MarshalJSON).
+	// It is never emitted as its own field.
+	Extra json.RawMessage `json:"-"`
+}
+
+// MarshalJSON renders the route and shallow-merges any Extra (advanced config)
+// keys over it, letting operators override or add route-level fields. Invalid
+// Extra JSON is ignored rather than failing the whole config push.
+func (r Route) MarshalJSON() ([]byte, error) {
+	type alias Route // no MarshalJSON; Extra is tagged "-" so it is skipped here
+	raw, err := json.Marshal(alias(r))
+	if err != nil {
+		return nil, err
+	}
+	if len(r.Extra) == 0 {
+		return raw, nil
+	}
+	var base map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &base); err != nil {
+		return nil, err
+	}
+	var extra map[string]json.RawMessage
+	if err := json.Unmarshal(r.Extra, &extra); err != nil {
+		return raw, nil
+	}
+	maps.Copy(base, extra)
+	return json.Marshal(base)
 }
 
 // Matcher conditions. Fields in a single Matcher are AND'd together;
@@ -51,18 +91,14 @@ type Matcher struct {
 	Path     []string         `json:"path,omitempty"`
 	Not      []Matcher        `json:"not,omitempty"`
 	RemoteIP *RemoteIPMatcher `json:"remote_ip,omitempty"`
-	// Error matches on HTTP error status codes (used in server.errors routes).
-	Error *ErrorMatcher `json:"error,omitempty"`
+	// Expression is a CEL matcher (http.matchers.expression). In errors.routes it
+	// matches the error status code, e.g. "{http.error.status_code} == 502".
+	// Caddy has no "error" matcher module, so error pages must match this way.
+	Expression string `json:"expression,omitempty"`
 }
 
 type RemoteIPMatcher struct {
 	Ranges []string `json:"ranges"`
-}
-
-// ErrorMatcher matches on one or more HTTP error status codes.
-// Used in apps.http.servers.<name>.errors.routes to dispatch custom error pages.
-type ErrorMatcher struct {
-	StatusCodes []int `json:"status_codes,omitempty"`
 }
 
 // Handler wraps all handler types. Only one field should be set.
@@ -91,8 +127,13 @@ type Handler struct {
 	RateLimits map[string]*RateLimitZone `json:"rate_limits,omitempty"`
 
 	// static_response
+	// Caddy's static_response module names this field "headers" (an http.Header).
+	// That JSON key is already taken by reverse_proxy's Headers (*HeaderOps)
+	// above, and two Go fields cannot share a tag (the encoder would drop both).
+	// The two handlers are mutually exclusive, so StaticHeaders is excluded from
+	// default marshaling ("-") and emitted as "headers" by Handler.MarshalJSON.
 	StatusCode    int                 `json:"status_code,omitempty"`
-	StaticHeaders map[string][]string `json:"static_headers,omitempty"`
+	StaticHeaders map[string][]string `json:"-"`
 	Body          string              `json:"body,omitempty"`
 
 	// authentication
@@ -100,6 +141,31 @@ type Handler struct {
 
 	// file_server
 	Root string `json:"root,omitempty"`
+}
+
+// MarshalJSON renders the handler, mapping StaticHeaders onto the "headers" key
+// that Caddy's static_response module expects. StaticHeaders shares that key
+// with the reverse_proxy Headers field, but the two are never set on the same
+// handler, so we inject StaticHeaders only when it is present.
+func (h Handler) MarshalJSON() ([]byte, error) {
+	type alias Handler // avoids recursion; StaticHeaders is tagged "-" so it is skipped here
+	raw, err := json.Marshal(alias(h))
+	if err != nil {
+		return nil, err
+	}
+	if h.StaticHeaders == nil {
+		return raw, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	hdrs, err := json.Marshal(h.StaticHeaders)
+	if err != nil {
+		return nil, err
+	}
+	obj["headers"] = hdrs
+	return json.Marshal(obj)
 }
 
 // RateLimitZone configures a caddy-ratelimit zone.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agent"
+	"github.com/posternproxy/posternproxy/internal/caddy"
 	"github.com/posternproxy/posternproxy/internal/models"
 	"github.com/posternproxy/posternproxy/internal/provisioner"
 	"github.com/posternproxy/posternproxy/internal/security"
@@ -21,6 +22,7 @@ type ServerService struct {
 	audit         *AuditService
 	hub           *agent.Hub
 	tokens        *APITokenService
+	caddy         *caddy.Client // local Caddy admin API, for the local server's liveness
 	encKey        [32]byte
 	controllerURL string // e.g. "wss://my-controller:81" — sent to agent config
 	agentBinPath  string // optional; path to local caddyproxy-agent binary
@@ -32,17 +34,38 @@ type ServerService struct {
 	runs   map[int64]*ProvisionRun
 }
 
-func NewServerService(db *sql.DB, audit *AuditService, hub *agent.Hub, tokens *APITokenService, encKey [32]byte, controllerURL, agentBinPath string) *ServerService {
+func NewServerService(db *sql.DB, audit *AuditService, hub *agent.Hub, tokens *APITokenService, caddyClient *caddy.Client, encKey [32]byte, controllerURL, agentBinPath string) *ServerService {
 	return &ServerService{
 		db:            db,
 		audit:         audit,
 		hub:           hub,
 		tokens:        tokens,
+		caddy:         caddyClient,
 		encKey:        encKey,
 		controllerURL: controllerURL,
 		agentBinPath:  agentBinPath,
 		runs:          make(map[int64]*ProvisionRun),
 	}
+}
+
+// reconcileStatus overwrites the derived liveness fields on a server row before
+// it is returned to callers. Remote servers track liveness via the agent's
+// WebSocket connection. The local server has no agent — its real liveness is
+// whether the local Caddy admin API answers, so we probe it here instead of
+// trusting the seeded "online" value (which was previously never reconciled and
+// made the dashboard show green even when Caddy was down or unconfigured).
+func (s *ServerService) reconcileStatus(srv *models.Server) {
+	if srv.IsLocal {
+		if s.caddy != nil && s.caddy.Ping() == nil {
+			srv.Online = true
+			srv.Status = "online"
+		} else {
+			srv.Online = false
+			srv.Status = "offline"
+		}
+		return
+	}
+	srv.Online = s.hub.IsOnline(srv.ID)
 }
 
 // GetProvisionRun returns the most-recent ProvisionRun for the given server,
@@ -77,7 +100,7 @@ func (s *ServerService) List(ctx context.Context) ([]*models.Server, error) {
 		SELECT id, name, hostname, ssh_port, ssh_user, ssh_auth_method,
 		       agent_token_hash, status, provision_log, is_local, last_seen_at,
 		       created_at, updated_at, caddy_version, uptime_seconds, active_routes, last_status_at,
-		       deployment_type, ssh_host_key
+		       deployment_type, ssh_host_key, http2_enabled
 		FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -90,7 +113,7 @@ func (s *ServerService) List(ctx context.Context) ([]*models.Server, error) {
 		if err != nil {
 			return nil, err
 		}
-		srv.Online = s.hub.IsOnline(srv.ID)
+		s.reconcileStatus(srv)
 		servers = append(servers, srv)
 	}
 	return servers, rows.Err()
@@ -101,7 +124,7 @@ func (s *ServerService) GetByID(ctx context.Context, id int64) (*models.Server, 
 		SELECT id, name, hostname, ssh_port, ssh_user, ssh_auth_method,
 		       agent_token_hash, status, provision_log, is_local, last_seen_at,
 		       created_at, updated_at, caddy_version, uptime_seconds, active_routes, last_status_at,
-		       deployment_type, ssh_host_key
+		       deployment_type, ssh_host_key, http2_enabled
 		FROM servers WHERE id = ?`, id)
 	srv, err := scanServerRow(row)
 	if err == sql.ErrNoRows {
@@ -110,7 +133,7 @@ func (s *ServerService) GetByID(ctx context.Context, id int64) (*models.Server, 
 	if err != nil {
 		return nil, err
 	}
-	srv.Online = s.hub.IsOnline(srv.ID)
+	s.reconcileStatus(srv)
 	return srv, nil
 }
 
@@ -232,6 +255,23 @@ func (s *ServerService) UpdateCredentials(ctx context.Context, callerID *int64, 
 		return fmt.Errorf("update server: %w", err)
 	}
 	s.audit.Log(ctx, callerID, "update", "server", &id, nil, ip)
+	return nil
+}
+
+// SetHTTP2 toggles the server-wide HTTP/2 setting. Allowed for the local server
+// too (HTTP/2 is a property of each server's HTTPS listener). The caller is
+// responsible for re-syncing Caddy so the change takes effect.
+func (s *ServerService) SetHTTP2(ctx context.Context, callerID *int64, id int64, enabled bool, ip string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET http2_enabled=?, updated_at=datetime('now') WHERE id=?`,
+		boolToInt(enabled), id)
+	if err != nil {
+		return fmt.Errorf("update http2_enabled: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrServerNotFound
+	}
+	s.audit.Log(ctx, callerID, "update", "server", &id, map[string]any{"http2_enabled": enabled}, ip)
 	return nil
 }
 
@@ -455,12 +495,14 @@ type serverScanner interface {
 
 func scanServerRow(row serverScanner) (*models.Server, error) {
 	var srv models.Server
+	var http2 int
 	err := row.Scan(
 		&srv.ID, &srv.Name, &srv.Hostname, &srv.SSHPort, &srv.SSHUser,
 		&srv.SSHAuthMethod, &srv.AgentTokenHash, &srv.Status, &srv.ProvisionLog,
 		&srv.IsLocal, &srv.LastSeenAt, &srv.CreatedAt, &srv.UpdatedAt,
 		&srv.CaddyVersion, &srv.UptimeSeconds, &srv.ActiveRoutes, &srv.LastStatusAt,
-		&srv.DeploymentType, &srv.SSHHostKey,
+		&srv.DeploymentType, &srv.SSHHostKey, &http2,
 	)
+	srv.HTTP2Enabled = http2 == 1
 	return &srv, err
 }

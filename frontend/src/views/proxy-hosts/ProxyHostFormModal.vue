@@ -247,18 +247,6 @@ function showAdvancedMode() {
                 </select>
               </div>
 
-              <!-- Feature toggles -->
-              <div class="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-4">
-                <label class="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-                  <input
-                    v-model="f.form.websocket_support"
-                    type="checkbox"
-                    class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  WebSocket Support
-                </label>
-              </div>
-
               <!-- Advanced toggle -->
               <button
                 type="button"

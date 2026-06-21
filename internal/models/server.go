@@ -30,6 +30,10 @@ type Server struct {
 	// "systemd" uses the SSH+xcaddy provisioner; "docker" uses docker run.
 	DeploymentType string `json:"deployment_type"`
 
+	// HTTP2Enabled controls whether this server's HTTPS listener offers HTTP/2.
+	// It is a server-wide property (not per-host); default on.
+	HTTP2Enabled bool `json:"http2_enabled"`
+
 	// SSHHostKey is the SHA256 fingerprint of the remote host's SSH public key,
 	// stored on first successful provisioning (TOFU). Not exposed via API.
 	SSHHostKey string `json:"-"`

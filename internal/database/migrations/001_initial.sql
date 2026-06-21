@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS servers (
     status                    TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'provisioning', 'online', 'offline', 'error')),
     provision_log             TEXT    NOT NULL DEFAULT '',
     deployment_type           TEXT    NOT NULL DEFAULT 'systemd',  -- "systemd" | "docker"
+    http2_enabled             INTEGER NOT NULL DEFAULT 1,  -- server-wide HTTP/2 toggle
     is_local                  INTEGER NOT NULL DEFAULT 0,
     -- Heartbeat / health fields populated by the agent's status payload.
     caddy_version             TEXT    NOT NULL DEFAULT '',
@@ -89,8 +90,6 @@ CREATE TABLE IF NOT EXISTS proxy_hosts (
     ssl_forced                    INTEGER NOT NULL DEFAULT 0,
     hsts_enabled                  INTEGER NOT NULL DEFAULT 0,
     hsts_subdomains               INTEGER NOT NULL DEFAULT 0,
-    http2_support                 INTEGER NOT NULL DEFAULT 1,
-    websocket_support             INTEGER NOT NULL DEFAULT 1,
     http_only                     INTEGER NOT NULL DEFAULT 0,
     tls_passthrough               INTEGER NOT NULL DEFAULT 0,
     access_list_id                INTEGER REFERENCES access_lists(id) ON DELETE SET NULL,

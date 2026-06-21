@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // BackupPayload is the JSON structure for export/import.
@@ -25,7 +27,6 @@ var tableOrder = []string{
 	"certificates",
 	"access_lists",
 	"access_list_clients",
-	"access_list_auth",
 	"proxy_hosts",
 	"redirection_hosts",
 	"stream_hosts",
@@ -51,24 +52,18 @@ var tableColumns = map[string]map[string]bool{
 	"access_list_clients": strset(
 		"id", "access_list_id", "address", "directive", "sort_order",
 	),
-	// access_list_auth was dropped in migration 015; kept here so that old
-	// backups containing this table produce a clear column-validation error
-	// rather than a confusing SQL error.
-	"access_list_auth": strset(
-		"id", "access_list_id", "username", "password_hash",
-	),
 	"proxy_hosts": strset(
 		"id", "server_id", "domain_names", "forward_scheme", "forward_host", "forward_port",
 		"certificate_id", "ssl_forced", "hsts_enabled", "hsts_subdomains",
-		"http2_support", "websocket_support", "access_list_id",
+		"access_list_id",
 		"advanced_config", "locations", "enabled", "caddy_id",
-		// health checks (migration 003)
+		// health checks
 		"hc_enabled", "hc_active_path", "hc_active_interval", "hc_active_timeout",
 		"hc_active_expect_status", "hc_passive_fail_duration", "hc_passive_max_fails",
 		"hc_passive_unhealthy_latency",
-		// rate limiting (migration 004)
+		// rate limiting
 		"rate_limit_enabled", "rate_limit_requests", "rate_limit_window",
-		// misc feature columns (migrations 006-012)
+		// misc feature columns
 		"tls_passthrough", "error_pages", "custom_headers",
 		"extra_upstreams", "lb_policy", "http_only",
 		"created_at", "updated_at",
@@ -151,7 +146,6 @@ func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (res
 		"stream_hosts",
 		"redirection_hosts",
 		"proxy_hosts",
-		"access_list_auth",
 		"access_list_clients",
 		"access_lists",
 		"certificates",
@@ -184,7 +178,7 @@ func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (res
 	if s.syncSvc != nil {
 		if err := s.syncSvc.FullSync(ctx); err != nil {
 			// Non-fatal — the DB is restored; Caddy will sync on next restart.
-			fmt.Printf("warning: caddy sync after restore failed: %v\n", err)
+			log.Warn().Err(err).Msg("caddy sync after restore failed")
 		}
 	}
 

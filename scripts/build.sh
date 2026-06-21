@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PosternProxy Build Script
-# Produces: ./posternproxy (controller), ./posternproxy-agent (agent)
+# Produces: ./posternproxy (controller), ./posternproxy-agent (agent),
+#           ./caddy (custom Caddy build with the L4 + rate-limit plugins)
 # Requires: Go 1.25+, Node 20+ with npm
 set -euo pipefail
 
@@ -17,6 +18,7 @@ GOARCH="${GOARCH:-amd64}"
 
 CONTROLLER_BIN="${OUT_DIR}/posternproxy"
 AGENT_BIN="${OUT_DIR}/posternproxy-agent"
+CADDY_BIN="${OUT_DIR}/caddy"
 
 ###############################################################################
 # HELPERS
@@ -86,6 +88,30 @@ go build \
 info "Agent: ${AGENT_BIN} ($(du -sh "${AGENT_BIN}" | cut -f1))"
 
 ###############################################################################
+# CADDY BUILD — custom build with L4 + rate-limit plugins
+###############################################################################
+# Building Caddy here (on the build/CI host) keeps the Go toolchain off the
+# production server. install.sh installs this binary directly and only falls
+# back to compiling on-server if it is missing.
+info "Building custom Caddy (GOOS=${GOOS} GOARCH=${GOARCH})..."
+
+if ! command -v xcaddy &>/dev/null && [[ ! -x "$(go env GOPATH)/bin/xcaddy" ]]; then
+    info "Installing xcaddy..."
+    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+fi
+XCADDY_BIN="$(command -v xcaddy 2>/dev/null || echo "$(go env GOPATH)/bin/xcaddy")"
+
+CGO_ENABLED=0 \
+GOOS="${GOOS}" \
+GOARCH="${GOARCH}" \
+"${XCADDY_BIN}" build \
+    --with github.com/mholt/caddy-l4 \
+    --with github.com/mholt/caddy-ratelimit \
+    --output "${CADDY_BIN}"
+
+info "Caddy: ${CADDY_BIN} ($(du -sh "${CADDY_BIN}" | cut -f1))"
+
+###############################################################################
 # DONE
 ###############################################################################
 echo ""
@@ -94,6 +120,7 @@ echo "  Build complete!"
 echo ""
 echo "  Controller: ${CONTROLLER_BIN}"
 echo "  Agent:      ${AGENT_BIN}"
+echo "  Caddy:      ${CADDY_BIN}"
 echo ""
 echo "  Deploy with: sudo bash scripts/install.sh"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
