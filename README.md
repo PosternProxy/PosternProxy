@@ -2,6 +2,8 @@
 
 > **Status: Beta** — Feature-complete for core use cases, under active testing. APIs and configuration may change before 1.0.
 
+**Read the Docs @  [docs.posternproxy.com](https://docs.posternproxy.com)**
+
 A self-hosted reverse proxy manager built on [Caddy](https://caddyserver.com). PosternProxy gives you a web UI to manage proxy hosts, redirections, stream hosts, SSL certificates, access lists, and port forwarding rules — all backed by Caddy's automatic HTTPS and distributed as a single binary with no Docker required.
 
 ## Features
@@ -277,3 +279,5 @@ This project uses AI assistance for tasks such as architecture planning, code re
 PosternProxy is licensed under the **GNU Affero General Public License v3 (AGPLv3)**. Commercial licenses are also available from Cyclone Software Solutions, LLC for use cases where AGPLv3 is not suitable.
 
 See [LICENSE](LICENSE) for the full license text and [LICENSING.md](LICENSING.md) for commercial options.
+
+**Find out More @ [www.posternproxy.com](https://www.posternproxy.com**
