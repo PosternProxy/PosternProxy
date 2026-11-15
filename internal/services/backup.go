@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // BackupPayload is the JSON structure for export/import.
@@ -31,7 +29,6 @@ var tableOrder = []string{
 	"redirection_hosts",
 	"stream_hosts",
 	"dead_hosts",
-	"port_forwards",
 	"settings",
 }
 
@@ -84,11 +81,6 @@ var tableColumns = map[string]map[string]bool{
 		"access_list_id", "advanced_config", "enabled", "caddy_id",
 		"status_code", "custom_body", "created_at", "updated_at",
 	),
-	"port_forwards": strset(
-		"id", "server_id", "protocol", "incoming_port", "forward_host",
-		"forward_port", "interface", "method", "enabled",
-		"created_at", "updated_at",
-	),
 	"settings": strset("key", "value"),
 }
 
@@ -140,7 +132,6 @@ func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (res
 
 	// Clear existing data in reverse FK order.
 	clearOrder := []string{
-		"port_forwards",
 		"settings",
 		"dead_hosts",
 		"stream_hosts",
@@ -176,13 +167,19 @@ func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (res
 
 	// Re-sync Caddy with the restored configuration.
 	if s.syncSvc != nil {
-		if err := s.syncSvc.FullSync(ctx); err != nil {
-			// Non-fatal — the DB is restored; Caddy will sync on next restart.
-			log.Warn().Err(err).Msg("caddy sync after restore failed")
+		if err := s.syncSvc.SyncDirty(ctx); err != nil {
+			return restored, err
 		}
 	}
 
 	return restored, nil
+}
+
+func (s *BackupService) ConfigurationStates(ctx context.Context) ([]ConfigState, error) {
+	if s.syncSvc == nil {
+		return []ConfigState{}, nil
+	}
+	return s.syncSvc.States(ctx)
 }
 
 // dumpTable returns all rows from a table as a slice of generic maps.

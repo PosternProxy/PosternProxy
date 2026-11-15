@@ -37,22 +37,23 @@ type Hub struct {
 	mu     sync.RWMutex
 	agents map[int64]*AgentConn // serverID → connection
 
-	// pendingSync holds server IDs that received a config change while the
-	// agent was offline. On reconnect we send a full sync.
-	pendingSync map[int64]bool
-
 	// onStatus is called when a status message arrives from an agent.
 	onStatus func(serverID int64, payload StatusPayload)
 
-	// onConnect is called when an agent reconnects after having missed config
-	// changes (pendingSync was true). The callback is responsible for building
-	// and pushing the full config for that server via hub.Send.
-	onConnect func(serverID int64)
+	// Every authenticated connection reconciles against durable desired state.
+	onConnect       func(serverID int64)
+	onCommandResult func(serverID int64, result CommandResultPayload)
+}
+
+func (h *Hub) SetCommandResultHandler(handler func(int64, CommandResultPayload)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onCommandResult = handler
 }
 
 // NewHub creates an empty Hub.
 // onStatus is invoked on every heartbeat/status message from any agent.
-// onConnect is invoked when an agent connects (or reconnects) with pending changes.
+// onConnect is invoked on every connection.
 func NewHub(onStatus func(int64, StatusPayload), onConnect func(int64)) *Hub {
 	if onStatus == nil {
 		onStatus = func(int64, StatusPayload) {}
@@ -61,10 +62,9 @@ func NewHub(onStatus func(int64, StatusPayload), onConnect func(int64)) *Hub {
 		onConnect = func(int64) {}
 	}
 	return &Hub{
-		agents:      make(map[int64]*AgentConn),
-		pendingSync: make(map[int64]bool),
-		onStatus:    onStatus,
-		onConnect:   onConnect,
+		agents:    make(map[int64]*AgentConn),
+		onStatus:  onStatus,
+		onConnect: onConnect,
 	}
 }
 
@@ -89,41 +89,30 @@ func (h *Hub) ServeWS(serverID int64, w http.ResponseWriter, r *http.Request) {
 		old.conn.Close()
 	}
 	h.agents[serverID] = ac
-	needSync := h.pendingSync[serverID]
-	delete(h.pendingSync, serverID)
 	h.mu.Unlock()
 
 	log.Info().Int64("server_id", serverID).Msg("agent connected")
 
-	if needSync {
-		log.Info().Int64("server_id", serverID).Msg("agent reconnected with pending changes — triggering full sync")
-		go h.onConnect(serverID)
-	}
+	go h.onConnect(serverID)
 
 	go ac.writePump()
 	ac.readPump(h)
 }
 
 // Send dispatches a message to the agent for the given server.
-// If no agent is connected, the server is marked pending-sync.
+// The caller retains durable pending work when dispatch fails.
 func (h *Hub) Send(serverID int64, msg Message) bool {
 	h.mu.RLock()
 	ac, ok := h.agents[serverID]
 	h.mu.RUnlock()
 	if !ok {
-		h.mu.Lock()
-		h.pendingSync[serverID] = true
-		h.mu.Unlock()
 		return false
 	}
 	select {
 	case ac.send <- msg:
 		return true
 	default:
-		// Channel full — agent is slow; mark for re-sync.
-		h.mu.Lock()
-		h.pendingSync[serverID] = true
-		h.mu.Unlock()
+		// The reconciliation worker retries a saturated connection.
 		return false
 	}
 }
@@ -141,13 +130,6 @@ func (h *Hub) IsOnline(serverID int64) bool {
 func (h *Hub) MarkOnlineForTest(serverID int64) {
 	h.mu.Lock()
 	h.agents[serverID] = &AgentConn{serverID: serverID}
-	h.mu.Unlock()
-}
-
-// MarkPendingSync flags a server so the next reconnect triggers a full sync.
-func (h *Hub) MarkPendingSync(serverID int64) {
-	h.mu.Lock()
-	h.pendingSync[serverID] = true
 	h.mu.Unlock()
 }
 
@@ -220,9 +202,12 @@ func (h *Hub) handleAgentMessage(ac *AgentConn, msg Message) {
 	case KindCommandResult:
 		var p CommandResultPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			if !p.Success {
-				log.Warn().Str("cmd", p.CommandKind).Str("err", p.Error).
-					Int64("server_id", ac.serverID).Msg("agent command failed")
+			h.mu.RLock()
+			current := h.agents[ac.serverID] == ac
+			handler := h.onCommandResult
+			h.mu.RUnlock()
+			if current && handler != nil {
+				handler(ac.serverID, p)
 			}
 		}
 	case KindHealthReport:

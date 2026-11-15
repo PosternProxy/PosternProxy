@@ -47,7 +47,7 @@ func (h *DeadHostHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	host, err := h.svc.Create(r.Context(), &claims.UserID, input, r.RemoteAddr)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	respondJSON(w, http.StatusCreated, host)
@@ -87,7 +87,7 @@ func (h *DeadHostHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	host, err := h.svc.Update(r.Context(), &claims.UserID, id, input, r.RemoteAddr)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, host)
@@ -104,7 +104,7 @@ func (h *DeadHostHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Delete(r.Context(), &claims.UserID, id, r.RemoteAddr); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -130,7 +130,7 @@ func (h *DeadHostHandler) setEnabled(w http.ResponseWriter, r *http.Request, ena
 		return
 	}
 	if err := h.svc.SetEnabled(r.Context(), &claims.UserID, id, enabled, r.RemoteAddr); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	host, _ := h.svc.GetByID(r.Context(), id)

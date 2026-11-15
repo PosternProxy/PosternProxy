@@ -1,11 +1,8 @@
 # Stage 1: Build Caddy with L4 + rate-limit modules
 FROM golang:1.25-alpine AS caddy-builder
 RUN apk add --no-cache git
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-RUN xcaddy build \
-    --with github.com/mholt/caddy-l4 \
-    --with github.com/mholt/caddy-ratelimit \
-    --output /usr/local/bin/caddy
+COPY internal/caddybuild/build.sh /build-caddy.sh
+RUN . /build-caddy.sh && build_caddy /usr/local/bin/caddy && verify_caddy /usr/local/bin/caddy
 
 # Stage 2: Build Vue frontend
 FROM node:20-alpine AS frontend-builder
@@ -32,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=caddy-builder /usr/local/bin/caddy /usr/local/bin/caddy
 COPY --from=app-builder /posternproxy /usr/local/bin/posternproxy
-COPY entrypoint.sh /entrypoint.sh
+COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /data/certs
 
 VOLUME /data

@@ -15,6 +15,11 @@ SERVICE_USER="posternproxy-agent"
 CADDY_USER="caddy"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CADDY_BUILD_SUPPORT="${SCRIPT_DIR}/caddy-build.sh"
+if [[ ! -f "${CADDY_BUILD_SUPPORT}" ]]; then
+    CADDY_BUILD_SUPPORT="${SCRIPT_DIR}/../internal/caddybuild/build.sh"
+fi
+. "${CADDY_BUILD_SUPPORT}"
 AGENT_BINARY="${SCRIPT_DIR}/../posternproxy-agent"
 
 ###############################################################################
@@ -55,33 +60,30 @@ if ! command -v caddy &>/dev/null; then
 
     if ! command -v go &>/dev/null; then
         info "Installing Go..."
-        GO_VERSION="1.22.3"
+        GO_VERSION="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"
+        [[ -n "${GO_VERSION}" ]] || die "Failed to resolve Go version"
         ARCH=$(dpkg --print-architecture)
         case "${ARCH}" in
             amd64) GO_ARCH="amd64" ;;
             arm64) GO_ARCH="arm64" ;;
             *) die "Unsupported architecture: ${ARCH}" ;;
         esac
-        curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tar.gz
+        curl -fsSL "https://go.dev/dl/${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tar.gz
         tar -C /usr/local -xzf /tmp/go.tar.gz
         rm /tmp/go.tar.gz
         export PATH="/usr/local/go/bin:$PATH"
         echo 'export PATH="/usr/local/go/bin:$PATH"' >> /etc/profile.d/go.sh
     fi
 
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    XCADDY_BIN="$(go env GOPATH)/bin/xcaddy"
-
     cd /tmp
-    "${XCADDY_BIN}" build \
-        --with github.com/mholt/caddy-l4 \
-        --output /usr/bin/caddy
+    build_caddy /usr/bin/caddy
 
     chmod +x /usr/bin/caddy
     info "Caddy built: $(/usr/bin/caddy version)"
 else
     info "Caddy already installed: $(caddy version)"
 fi
+verify_caddy "$(command -v caddy)" || die "Caddy does not match the required build contract."
 
 ###############################################################################
 # SYSTEM USERS

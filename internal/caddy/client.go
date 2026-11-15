@@ -2,6 +2,7 @@ package caddy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,10 @@ func NewClient(baseURL string) *Client {
 // Load replaces the entire Caddy config atomically via POST /load.
 func (c *Client) Load(cfg *Config) error {
 	return c.do(http.MethodPost, "/load", cfg, nil)
+}
+
+func (c *Client) LoadContext(ctx context.Context, cfg *Config) error {
+	return c.doContext(ctx, http.MethodPost, "/load", cfg, nil)
 }
 
 // GetConfig retrieves the full running config.
@@ -83,6 +88,10 @@ type UpstreamStatus struct {
 }
 
 func (c *Client) do(method, path string, body, out any) error {
+	return c.doContext(context.Background(), method, path, body, out)
+}
+
+func (c *Client) doContext(ctx context.Context, method, path string, body, out any) error {
 	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -92,7 +101,7 @@ func (c *Client) do(method, path string, body, out any) error {
 		bodyReader = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequest(method, c.baseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

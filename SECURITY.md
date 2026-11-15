@@ -30,8 +30,10 @@ provided for the latest Beta release and the current `master` branch only.
 - Management access uses short-lived JWT access tokens, refresh cookies, CSRF
   protection, bcrypt password hashes, and tighter rate limiting on login and
   agent authentication endpoints.
-- General authenticated API rate limiting is not yet implemented. Deployments
-  should restrict management access at the network or reverse-proxy layer.
+- Authenticated management API routes have a 120-request/minute per-IP limit;
+  login and agent authentication have stricter limits. Forwarding-header trust
+  is still a beta security blocker, so restrict management access at the network
+  or reverse-proxy layer rather than relying on these limits alone.
 - Stored SSH credentials are encrypted with AES-256-GCM using a key derived
   from the configured JWT secret. Keep that secret stable, private, and backed
   up; changing it prevents existing encrypted credentials from being read.

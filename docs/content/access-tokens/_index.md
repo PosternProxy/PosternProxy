@@ -12,8 +12,8 @@ Access tokens let you authenticate to the PosternProxy REST API without using yo
 1. Click **Access Tokens** in the sidebar (or go to your profile → **API Tokens**)
 2. Click **+ Create Token**
 3. Enter a **Name** to identify the token (e.g. `ci-deploy`, `monitoring`)
-4. Click **Create**
-5. **Copy the token immediately** — it is only displayed once and cannot be retrieved afterwards
+4. Choose the scopes and expiration, then click **Create**
+5. **Copy the token immediately**. It is displayed only once.
 
 <!-- TODO: Screenshot — Create Token dialog with the token value shown -->
 
@@ -26,20 +26,27 @@ curl -H "Authorization: Bearer <your-token>" \
      http://your-server:81/api/proxy-hosts
 ```
 
-All API endpoints that require authentication accept Bearer tokens.
+Management API routes accept API tokens subject to scope and role checks.
+Creating an API token requires a signed-in user session.
 
 ## Token permissions
 
-Tokens inherit the permissions of the user who created them. An admin user's token has admin-level API access; a viewer's token has read-only access.
+The `read` scope allows read requests, and `write` allows mutating requests.
+The creator's current role still applies. Admin-only operations require an
+admin creator, and a token with `write` cannot grant a viewer permission to
+change resources.
 
 ## Managing tokens
 
-The Access Tokens page lists all tokens belonging to the current user:
+The Access Tokens page lists your tokens. Administrators can see and revoke
+other users' tokens.
 
 | Column | Description |
 |---|---|
 | Name | The label you gave the token |
 | Created | When the token was created |
+| Scopes | The operations the token can authorize |
+| Expires | When the token expires, if configured |
 | Last used | When the token was last used to make an API request |
 
 Click the **Delete** icon to revoke a token immediately. Revoked tokens are rejected on next use.
@@ -58,15 +65,16 @@ The full REST API is available at `http://your-server:81/api`. All resources fol
 | `POST` | `/api/proxy-hosts/{id}/enable` | Enable a proxy host |
 | `POST` | `/api/proxy-hosts/{id}/disable` | Disable a proxy host |
 
-The same pattern applies to `redirection-hosts`, `stream-hosts`, `dead-hosts`, `certificates`, `access-lists`, and `port-forwards`.
+Redirection, stream, and dead hosts use the same host route pattern. Traffic
+Forwarding rules use the `/api/stream-hosts` resource.
 
-### Auth endpoints (no token required)
+### User session endpoints
 
 ```
-POST /api/auth/login
-POST /api/auth/refresh
-POST /api/auth/logout
-GET  /api/auth/me
+POST /api/auth/login    # Username and password
+POST /api/auth/refresh  # Refresh cookie
+POST /api/auth/logout   # Session access token
+GET  /api/auth/me       # Session access token
 ```
 
 ### Example: create a proxy host via API
@@ -88,6 +96,6 @@ curl -X POST \
 
 ## Notes
 
-- Tokens do not expire. Rotate them regularly or delete and recreate as part of your secret rotation policy.
-- All API requests made with a token are recorded in the [Audit Log]({{< relref "/audit-log" >}}) with the associated user.
+- Tokens can have an expiration date. You can revoke a token before it expires.
+- Audited operations made with an API token are attributed to its creator in the [Audit Log]({{< relref "/audit-log" >}}).
 - There is no rate limit per token beyond the management API rate limit (120 req/min per IP).

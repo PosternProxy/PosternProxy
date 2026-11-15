@@ -13,8 +13,8 @@ A self-hosted reverse proxy manager built on [Caddy](https://caddyserver.com). P
 - **Stream hosts** — TCP/UDP stream proxy and TLS passthrough via Caddy L4
 - **Dead hosts** — return 404 for parked domains
 - **SSL certificates** — automatic Let's Encrypt (HTTP-01) or upload your own PEM files
-- **Access lists** — IP allowlist/denylist and HTTP Basic Auth per host
-- **Port forwarding** — iptables/socat rules managed from the UI
+- **Access lists** — IP allowlist/denylist per host
+- **Traffic forwarding** — raw TCP/UDP forwarding to any backend via Caddy Layer 4
 - **Multi-server** — manage remote servers via a lightweight agent connected over WebSocket
 - **Audit log** — every change recorded with actor, IP, and before/after snapshot
 - **Config history** — roll back any proxy host to a previous configuration
@@ -73,8 +73,9 @@ The UI is at `http://<server-ip>:81`. On first boot a random admin password is p
 #    from https://github.com/PosternProxy/PosternProxy/releases/
 #    (rename to the bare names if the assets carry a platform suffix)
 
-# 2. Copy the binaries + install script into one directory on the server
+# 2. Copy the binaries + install script + shared build contract
 scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
+scp internal/caddybuild/build.sh root@your-server:/tmp/posternproxy/caddy-build.sh
 
 # 3. Install (as root)
 ssh root@your-server

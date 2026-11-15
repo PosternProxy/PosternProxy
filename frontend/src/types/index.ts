@@ -224,20 +224,6 @@ export interface AccessListClient {
   sort_order: number
 }
 
-export interface PortForward {
-  id: number
-  server_id: number
-  protocol: 'tcp' | 'udp' | 'tcp+udp'
-  incoming_port: number
-  forward_host: string
-  forward_port: number
-  interface: string
-  method: 'iptables' | 'nftables' | 'socat'
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
 export interface AuditLogEntry {
   id: number
   user_id?: number

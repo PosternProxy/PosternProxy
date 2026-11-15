@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/posternproxy/posternproxy/internal/models"
+	"github.com/rs/zerolog/log"
 )
 
 // AuditService writes user-action records to the audit_log table.
@@ -16,6 +17,44 @@ type AuditService struct {
 // NewAuditService creates an AuditService backed by db.
 func NewAuditService(db *sql.DB) *AuditService {
 	return &AuditService{db: db}
+}
+
+func (s *AuditService) HostChange(ctx context.Context, actor *int64, action, resource string, id int64, before, after any, ip string) {
+	beforeSnapshot, err := hostAuditSnapshot(before)
+	if err != nil {
+		log.Error().Str("resource", resource).Msg("failed to prepare host audit snapshot")
+		return
+	}
+	afterSnapshot, err := hostAuditSnapshot(after)
+	if err != nil {
+		log.Error().Str("resource", resource).Msg("failed to prepare host audit snapshot")
+		return
+	}
+	if err := s.Log(ctx, actor, action, resource, &id, map[string]any{"before": beforeSnapshot, "after": afterSnapshot}, ip); err != nil {
+		log.Error().Err(err).Str("resource", resource).Int64("resource_id", id).Msg("failed to audit host change")
+	}
+}
+
+func hostAuditSnapshot(entity any) (map[string]json.RawMessage, error) {
+	if entity == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(entity)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	safe := map[string]json.RawMessage{}
+	// Route bodies, headers, and upstream configuration can carry credentials.
+	for _, key := range []string{"id", "server_id", "domain_names", "enabled", "certificate_id", "access_list_id", "incoming_port", "forward_port", "protocol", "status_code"} {
+		if value, ok := fields[key]; ok {
+			safe[key] = value
+		}
+	}
+	return safe, nil
 }
 
 // Log records a single user action. It is best-effort: callers should not

@@ -22,6 +22,11 @@ CADDY_ADMIN="http://localhost:2019"
 # the upload step simple: next to this script, one directory above it (repo
 # layout: scripts/install.sh + ./posternproxy), or the current directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CADDY_BUILD_SUPPORT="${SCRIPT_DIR}/caddy-build.sh"
+if [[ ! -f "${CADDY_BUILD_SUPPORT}" ]]; then
+    CADDY_BUILD_SUPPORT="${SCRIPT_DIR}/../internal/caddybuild/build.sh"
+fi
+. "${CADDY_BUILD_SUPPORT}"
 find_binary() {
     local name="$1" candidate
     for candidate in \
@@ -109,20 +114,14 @@ else
         echo 'export PATH="/usr/local/go/bin:$PATH"' >> /etc/profile.d/go.sh
     fi
 
-    # Install xcaddy
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    XCADDY_BIN="$(go env GOPATH)/bin/xcaddy"
-
     # Build Caddy with L4 (stream hosts / TLS passthrough) and rate-limit plugins
     cd /tmp
-    "${XCADDY_BIN}" build \
-        --with github.com/mholt/caddy-l4 \
-        --with github.com/mholt/caddy-ratelimit \
-        --output /usr/bin/caddy
+    build_caddy /usr/bin/caddy
 
     chmod +x /usr/bin/caddy
     info "Caddy built: $(/usr/bin/caddy version)"
 fi
+verify_caddy "$(command -v caddy)" || die "Caddy does not match the required build contract."
 
 ###############################################################################
 # SYSTEM USERS

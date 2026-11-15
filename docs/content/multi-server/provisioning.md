@@ -21,14 +21,10 @@ The remote server must have:
 
 ### Caddy
 
-The provisioner builds Caddy from source using `xcaddy`, including the required plugins:
-
-```bash
-xcaddy build \
-  --with github.com/mholt/caddy-l4 \
-  --with github.com/mholt/caddy-ratelimit \
-  --output /usr/bin/caddy
-```
+The provisioner uses the shared build to install the pinned Caddy version with
+the L4 and rate-limit plugins. It checks the core and plugin versions of any
+existing Caddy binary and stops if they are incompatible. See the
+[Caddy build contract]({{< relref "/administration/release-validation" >}}).
 
 ### The agent binary
 
@@ -63,7 +59,6 @@ MemoryDenyWriteExecute=true
 | fail2ban | Install + configure with a Caddy/agent login jail |
 | unattended-upgrades | Install + enable for security updates |
 | sysctl | `rp_filter=1`, `tcp_syncookies=1`, disable ICMP redirects |
-| IP forwarding | Enable `net.ipv4.ip_forward=1` for port forwarding support |
 
 ### Agent config
 

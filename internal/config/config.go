@@ -11,13 +11,14 @@ import (
 )
 
 type Config struct {
-	ListenAddr    string
-	DBPath        string
-	CaddyAPI      string
-	CertDir       string
-	JWTSecret     string
-	DataDir       string
-	EncryptionKey [32]byte // AES-256-GCM key derived from JWTSecret
+	TrustedProxies []string
+	ListenAddr     string
+	DBPath         string
+	CaddyAPI       string
+	CertDir        string
+	JWTSecret      string
+	DataDir        string
+	EncryptionKey  [32]byte // AES-256-GCM key derived from JWTSecret
 
 	// Multi-server
 	ControllerURL string // Advertised WebSocket URL for agents to connect back to
@@ -35,6 +36,7 @@ type Config struct {
 
 func Load() *Config {
 	cfg := &Config{
+		TrustedProxies: parseOrigins(envOr("POSTERNPROXY_TRUSTED_PROXIES", "")),
 		ListenAddr:     envOr("POSTERNPROXY_LISTEN", ":81"),
 		DBPath:         envOr("POSTERNPROXY_DB_PATH", "data/posternproxy.db"),
 		CaddyAPI:       envOr("POSTERNPROXY_CADDY_API", "http://localhost:2019"),

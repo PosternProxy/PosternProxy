@@ -4,7 +4,7 @@
 // init, signal handling, the http.Server lifecycle, CLI subcommands); it
 // delegates everything else — DB open + migrations, service construction,
 // hub wiring, config-history rollback registration, initial Caddy sync,
-// port-forward restoration, and router construction — to App.New().
+// reconciliation, and router construction — to App.New().
 package app
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/posternproxy/posternproxy/internal/config"
 	"github.com/posternproxy/posternproxy/internal/database"
 	"github.com/posternproxy/posternproxy/internal/models"
+	"github.com/posternproxy/posternproxy/internal/security"
 	"github.com/posternproxy/posternproxy/internal/services"
 	"github.com/posternproxy/posternproxy/internal/ui"
 	"github.com/rs/zerolog/log"
@@ -39,8 +40,9 @@ type App struct {
 	// reuse the same service the HTTP layer uses.
 	Users *services.UserService
 
-	// healthSvc is held so Close() can stop its background poller.
 	healthSvc *services.HealthService
+	syncSvc   *services.CaddySyncService
+	cancel    context.CancelFunc
 }
 
 // New constructs an App from cfg. It:
@@ -49,18 +51,24 @@ type App struct {
 //   - wires the agent hub callbacks,
 //   - registers config-history rollback handlers,
 //   - performs the initial Caddy full-sync (non-fatal on failure),
-//   - restores port-forwarding rules,
 //   - starts background health polling,
 //   - builds the HTTP router.
 //
 // It does NOT start the HTTP server — the caller does that. Errors are
 // returned rather than fatal-ed so main.go is the only place that calls
 // log.Fatal.
-//
-// The ctx is currently unused at the bootstrap layer but is accepted as the
-// first parameter to allow future migration to context-aware service init
-// (e.g. when Task 9 lands).
 func New(ctx context.Context, cfg *config.Config) (*App, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ready := false
+	defer func() {
+		if !ready {
+			cancel()
+		}
+	}()
+	trustedProxies, err := security.ParseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("configure client identity: %w", err)
+	}
 	log.Info().Str("db", cfg.DBPath).Msg("opening database")
 	db, err := database.Open(cfg.DBPath)
 	if err != nil {
@@ -82,10 +90,13 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	userSvc := services.NewUserService(db, auditSvc)
 	accessListSvc := services.NewAccessListService(db, auditSvc)
 	certSvc := services.NewCertificateService(db, cfg.CertDir, auditSvc)
-	portForwardSvc := services.NewPortForwardService(db, auditSvc)
 	healthSvc := services.NewHealthService(caddyClient)
 	tlsProbeSvc := services.NewTLSProbeService(db, "127.0.0.1:443")
-	historySvc := services.NewConfigHistoryService(db)
+	historySvc := services.NewConfigHistoryService(db, cfg.EncryptionKey)
+	if err := historySvc.ProtectExisting(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	// Agent hub — constructed before CaddySyncService so the onConnect
 	// callback can close over caddySyncSvc once it is assigned below.
@@ -105,7 +116,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		func(serverID int64) {
 			if caddySyncSvc != nil {
 				// Background work — request context would cancel sync if the user navigated away.
-				if err := caddySyncSvc.SyncServer(context.Background(), serverID); err != nil {
+				if err := caddySyncSvc.Reconnect(ctx, serverID); err != nil {
 					log.Error().Err(err).Int64("server_id", serverID).Msg("full sync on reconnect failed")
 				}
 			}
@@ -113,6 +124,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	)
 
 	caddySyncSvc = services.NewCaddySyncService(db, caddyClient, hub, cfg.Version)
+	accessListSvc = services.NewAccessListService(db, auditSvc, caddySyncSvc)
 
 	// Host services route remote-server mutations through the hub via
 	// caddySyncSvc rather than the local Caddy admin API.
@@ -134,11 +146,10 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	// with no retry, so nothing was ever proxied. Retry in the background until
 	// it succeeds.
 	log.Info().Str("caddy_api", cfg.CaddyAPI).Msg("syncing Caddy configuration")
-	go syncCaddyWithRetry(ctx, caddySyncSvc)
-
-	// ── Port forwards lost on reboot — restore them ──────────────────────
-	log.Info().Msg("restoring port forwarding rules")
-	portForwardSvc.RestoreAll(ctx)
+	if err := caddySyncSvc.Start(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	// ── Background upstream health polling ────────────────────────────────
 	healthSvc.Start(30 * time.Second)
@@ -163,6 +174,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}()
 
 	router := api.NewRouter(api.RouterConfig{
+		TrustedProxies:         trustedProxies,
 		JWTSecret:              cfg.JWTSecret,
 		AllowedOrigins:         cfg.AllowedOrigins,
 		DB:                     db,
@@ -175,7 +187,6 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		StreamHostService:      streamHostSvc,
 		AccessListService:      accessListSvc,
 		CertificateService:     certSvc,
-		PortForwardService:     portForwardSvc,
 		ServerService:          serverSvc,
 		SettingsService:        settingsSvc,
 		APITokenService:        tokenSvc,
@@ -191,12 +202,15 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		SecureCookies:          cfg.BehindTLSProxy,
 	})
 
+	ready = true
 	return &App{
+		cancel:    cancel,
 		Cfg:       cfg,
 		DB:        db,
 		Router:    router,
 		Users:     userSvc,
 		healthSvc: healthSvc,
+		syncSvc:   caddySyncSvc,
 	}, nil
 }
 
@@ -205,37 +219,16 @@ func (a *App) Close() error {
 	if a == nil {
 		return nil
 	}
+	if a.cancel != nil {
+		a.cancel()
+	}
 	if a.DB != nil {
+		if a.syncSvc != nil {
+			a.syncSvc.Close()
+		}
 		return a.DB.Close()
 	}
 	return nil
-}
-
-// syncCaddyWithRetry pushes the full config to Caddy, retrying with a capped
-// backoff until it succeeds or ctx is cancelled. The first attempt is immediate
-// so a healthy boot syncs without delay.
-func syncCaddyWithRetry(ctx context.Context, sync *services.CaddySyncService) {
-	const maxDelay = 30 * time.Second
-	delay := 1 * time.Second
-	for {
-		if err := sync.FullSync(ctx); err != nil {
-			log.Warn().Err(err).Dur("retry_in", delay).Msg("Caddy sync failed (Caddy may not be ready yet); will retry")
-		} else {
-			log.Info().Msg("Caddy configuration synced")
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-		}
-		if delay < maxDelay {
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-		}
-	}
 }
 
 // registerRollbackHandlers wires every resource-rollback handler the
@@ -248,6 +241,7 @@ func registerRollbackHandlers(historySvc *services.ConfigHistoryService, proxyHo
 			return fmt.Errorf("unmarshal proxy_host snapshot: %w", err)
 		}
 		input := models.CreateProxyHostInput{
+			ServerID:    h.ServerID,
 			DomainNames: h.DomainNames, ForwardScheme: h.ForwardScheme,
 			ForwardHost: h.ForwardHost, ForwardPort: h.ForwardPort,
 			CertificateID: h.CertificateID, SSLForced: h.SSLForced,

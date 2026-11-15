@@ -11,19 +11,19 @@ import "encoding/json"
 // directions.  The Payload field carries the JSON-encoded inner struct whose
 // type is identified by Kind.
 type Message struct {
-	Kind    string          `json:"kind"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	ID       string          `json:"id,omitempty"`
+	Revision int64           `json:"revision,omitempty"`
+	Kind     string          `json:"kind"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
 }
 
 // ── Controller → Agent commands ───────────────────────────────────────────────
 
 const (
-	KindConfigFullSync    = "config_full_sync"
-	KindConfigPatch       = "config_patch"
-	KindConfigDelete      = "config_delete"
-	KindPortForwardApply  = "portforward_apply"
-	KindPortForwardRemove = "portforward_remove"
-	KindHealthCheck       = "health_check"
+	KindConfigFullSync = "config_full_sync"
+	KindConfigPatch    = "config_patch"
+	KindConfigDelete   = "config_delete"
+	KindHealthCheck    = "health_check"
 )
 
 // CertFile carries the PEM bytes for one custom certificate so the agent
@@ -52,17 +52,6 @@ type ConfigDeletePayload struct {
 	Path string `json:"path"`
 }
 
-// PortForwardPayload describes one port forwarding rule.
-type PortForwardPayload struct {
-	ID           int64  `json:"id"`
-	Protocol     string `json:"protocol"`
-	IncomingPort int    `json:"incoming_port"`
-	ForwardHost  string `json:"forward_host"`
-	ForwardPort  int    `json:"forward_port"`
-	Interface    string `json:"interface"`
-	Method       string `json:"method"`
-}
-
 // ── Agent → Controller responses ──────────────────────────────────────────────
 
 const (
@@ -81,6 +70,8 @@ type StatusPayload struct {
 
 // CommandResultPayload reports success or failure of a command.
 type CommandResultPayload struct {
+	CommandID   string `json:"command_id,omitempty"`
+	Revision    int64  `json:"revision,omitempty"`
 	CommandKind string `json:"command_kind"`
 	Success     bool   `json:"success"`
 	Error       string `json:"error,omitempty"`

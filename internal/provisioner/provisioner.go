@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/posternproxy/posternproxy/internal/caddybuild"
 )
 
 // Result is returned when provisioning finishes (success or failure).
@@ -135,7 +137,7 @@ func provisionSystemd(input ProvisionInput, c *sshClient, log func(string), fini
 
 	log(fmt.Sprintf("[%s] Writing provisioning script...", timestamp()))
 	scriptContent := fmt.Sprintf("CONTROLLER_URL=%q\nAGENT_TOKEN=%q\n%s",
-		input.ControllerURL, input.AgentToken, installScript)
+		input.ControllerURL, input.AgentToken, caddybuild.Script+"\n"+installScript)
 
 	if err := c.upload("/tmp/posternproxy-install.sh", strings.NewReader(scriptContent)); err != nil {
 		finish(fmt.Errorf("upload script: %w", err))

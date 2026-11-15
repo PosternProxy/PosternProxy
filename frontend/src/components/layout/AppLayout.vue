@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import ConfigurationStatus from '@/components/ConfigurationStatus.vue'
 
 const sidebarCollapsed = ref(false)
 </script>
@@ -18,6 +19,7 @@ const sidebarCollapsed = ref(false)
       </AppHeader>
 
       <main class="p-6">
+        <ConfigurationStatus />
         <router-view />
       </main>
     </div>

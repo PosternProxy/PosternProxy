@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -20,10 +22,14 @@ const (
 
 // Claims holds the application-specific fields embedded in a JWT.
 type Claims struct {
-	UserID    int64  `json:"sub"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	TokenType string `json:"token_type"`
+	SessionID      string   `json:"sid,omitempty"`
+	CredentialKind string   `json:"-"`
+	APITokenID     int64    `json:"-"`
+	Scopes         []string `json:"-"`
+	UserID         int64    `json:"sub"`
+	Email          string   `json:"email"`
+	Role           string   `json:"role"`
+	TokenType      string   `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
@@ -37,12 +43,16 @@ type TokenPair struct {
 // GenerateTokenPair signs a short-lived access token and a long-lived refresh
 // token for the given user identity using HMAC-SHA256.
 func GenerateTokenPair(secret string, userID int64, email, role string) (*TokenPair, error) {
-	accessToken, err := generateToken(secret, userID, email, role, TokenTypeAccess, AccessTokenDuration)
+	return GenerateSessionTokenPair(secret, userID, email, role, "")
+}
+
+func GenerateSessionTokenPair(secret string, userID int64, email, role, sessionID string) (*TokenPair, error) {
+	accessToken, err := generateToken(secret, userID, email, role, sessionID, TokenTypeAccess, AccessTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
-	refreshToken, err := generateToken(secret, userID, email, role, TokenTypeRefresh, RefreshTokenDuration)
+	refreshToken, err := generateToken(secret, userID, email, role, sessionID, TokenTypeRefresh, RefreshTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
@@ -99,14 +109,20 @@ func ValidateRefreshToken(secret, tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-func generateToken(secret string, userID int64, email, role, tokenType string, duration time.Duration) (string, error) {
+func generateToken(secret string, userID int64, email, role, sessionID, tokenType string, duration time.Duration) (string, error) {
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate token identity: %w", err)
+	}
 	now := time.Now()
 	claims := &Claims{
+		SessionID: sessionID,
 		UserID:    userID,
 		Email:     email,
 		Role:      role,
 		TokenType: tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        hex.EncodeToString(nonce[:]),
 			ExpiresAt: jwt.NewNumericDate(now.Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),

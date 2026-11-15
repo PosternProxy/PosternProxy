@@ -61,12 +61,24 @@ func (h *BackupHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	restored, err := h.backup.Import(r.Context(), payload)
 	if err != nil {
-		http.Error(w, "import failed: "+err.Error(), http.StatusInternalServerError)
+		respondServiceError(w, http.StatusInternalServerError, err)
 		return
+	}
+	states, err := h.backup.ConfigurationStates(r.Context())
+	if err != nil {
+		respondServiceError(w, http.StatusInternalServerError, err)
+		return
+	}
+	synced := len(states) > 0
+	for _, state := range states {
+		if state.Status != "applied" || state.AppliedRevision != state.DesiredRevision {
+			synced = false
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"restored": restored,
-		"synced":   true,
+		"restored":      restored,
+		"synced":        synced,
+		"configuration": states,
 	})
 }

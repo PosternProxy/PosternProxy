@@ -15,9 +15,9 @@ export async function exportBackup(): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
-export async function importBackup(file: File): Promise<{ restored: number }> {
+export async function importBackup(file: File): Promise<{ restored: number; synced: boolean }> {
   const text = await file.text()
   const json = JSON.parse(text)
-  const { data } = await client.post<{ restored: number }>('/backup/import', json)
+  const { data } = await client.post<{ restored: number; synced: boolean }>('/backup/import', json)
   return data
 }

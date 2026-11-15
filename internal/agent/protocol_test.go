@@ -91,31 +91,3 @@ func TestNewMessage_CommandResult(t *testing.T) {
 		t.Errorf("CommandKind = %q, want %q", decoded.CommandKind, KindConfigPatch)
 	}
 }
-
-func TestNewMessage_PortForwardPayload(t *testing.T) {
-	payload := PortForwardPayload{
-		ID:           3,
-		Protocol:     "tcp",
-		IncomingPort: 8080,
-		ForwardHost:  "192.168.1.10",
-		ForwardPort:  80,
-		Interface:    "eth0",
-		Method:       "iptables",
-	}
-
-	msg, err := NewMessage(KindPortForwardApply, payload)
-	if err != nil {
-		t.Fatalf("NewMessage: %v", err)
-	}
-
-	var decoded PortForwardPayload
-	if err := json.Unmarshal(msg.Payload, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if decoded.Protocol != "tcp" {
-		t.Errorf("Protocol = %q, want tcp", decoded.Protocol)
-	}
-	if decoded.IncomingPort != 8080 {
-		t.Errorf("IncomingPort = %d, want 8080", decoded.IncomingPort)
-	}
-}

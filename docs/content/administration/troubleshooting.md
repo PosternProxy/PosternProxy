@@ -34,7 +34,7 @@ Common causes:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `bind: permission denied` on port 80/443 | Missing `CAP_NET_BIND_SERVICE` | Check systemd unit `AmbientCapabilities` |
-| `plugin not found: layer4` | Caddy built without L4 plugin | Rebuild Caddy with `--with github.com/mholt/caddy-l4` |
+| `plugin not found: layer4` | Caddy built without L4 plugin | Replace Caddy using the [pinned build]({{< relref "/administration/release-validation" >}}) |
 | `failed to obtain certificate` | DNS not propagated or port 80 blocked | Check DNS and UFW |
 
 ## UI and API errors

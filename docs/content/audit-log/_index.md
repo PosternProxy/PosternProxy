@@ -14,11 +14,10 @@ The Audit Log records every configuration change, login attempt, and administrat
 | **Auth events** | Login success, login failure, logout, token creation/deletion |
 | **Proxy host mutations** | Create, update, delete, enable, disable |
 | **Redirection host mutations** | Create, update, delete, enable, disable |
-| **Stream host mutations** | Create, update, delete, enable, disable |
+| **Stream host mutations** | Create, update, delete, enable, disable, including Traffic Forwarding rules |
 | **Dead host mutations** | Create, update, delete, enable, disable |
 | **Certificate events** | Create, upload, renew, delete |
 | **Access list mutations** | Create, update, delete |
-| **Port forward mutations** | Create, update, delete, enable, disable |
 | **User mutations** | Create, update, delete, password change |
 | **Settings changes** | Any settings key updated |
 | **Backup/restore** | Backup downloaded, restore completed |

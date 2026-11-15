@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
 
 	"github.com/posternproxy/posternproxy/internal/auth"
+	"github.com/posternproxy/posternproxy/internal/services"
 )
 
 type errorResponse struct {
@@ -39,6 +41,15 @@ func RespondJSON(w http.ResponseWriter, status int, v any) {
 
 func respondError(w http.ResponseWriter, status int, msg string) {
 	respondJSON(w, status, errorResponse{Error: msg})
+}
+
+func respondServiceError(w http.ResponseWriter, status int, err error) {
+	var apply *services.ConfigApplyError
+	if errors.As(err, &apply) {
+		respondJSON(w, http.StatusBadGateway, map[string]any{"error": apply.Error(), "saved": true, "server_id": apply.ServerID})
+		return
+	}
+	respondError(w, status, err.Error())
 }
 
 // maxRequestBody is the maximum size of a JSON request body (1 MB).

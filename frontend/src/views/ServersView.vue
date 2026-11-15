@@ -53,7 +53,7 @@ const editError = ref('')
 
 // Re-sync state
 const resyncingId = ref<number | null>(null)
-const resyncSuccessId = ref<number | null>(null)
+const resyncAcceptedId = ref<number | null>(null)
 const resyncError = ref('')
 
 // HTTP/2 toggle state
@@ -214,13 +214,13 @@ async function syncServerStatus(id: number) {
 
 async function doResync(srv: Server) {
   resyncingId.value = srv.id
-  resyncSuccessId.value = null
+  resyncAcceptedId.value = null
   resyncError.value = ''
   try {
     await resyncServer(srv.id)
-    resyncSuccessId.value = srv.id
+    resyncAcceptedId.value = srv.id
     setTimeout(() => {
-      if (resyncSuccessId.value === srv.id) resyncSuccessId.value = null
+      if (resyncAcceptedId.value === srv.id) resyncAcceptedId.value = null
     }, 2000)
   } catch (e: unknown) {
     resyncError.value = e instanceof Error ? e.message : 'Resync failed'
@@ -417,7 +417,7 @@ function formatUptime(seconds: number): string {
                   v-if="!srv.is_local"
                   class="rounded px-2 py-1 text-xs font-medium transition-colors"
                   :class="
-                    resyncSuccessId === srv.id
+                    resyncAcceptedId === srv.id
                       ? 'bg-emerald-100 text-emerald-700'
                       : 'text-indigo-600 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40'
                   "
@@ -428,7 +428,7 @@ function formatUptime(seconds: number): string {
                   @click="doResync(srv)"
                 >
                   <span v-if="resyncingId === srv.id">Syncing…</span>
-                  <span v-else-if="resyncSuccessId === srv.id">✓ Synced</span>
+                  <span v-else-if="resyncAcceptedId === srv.id">✓ Sync requested</span>
                   <span v-else>Re-sync</span>
                 </button>
 

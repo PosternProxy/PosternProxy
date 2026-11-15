@@ -9,6 +9,7 @@ set -euo pipefail
 # CONFIGURATION
 ###############################################################################
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "${PROJECT_ROOT}/internal/caddybuild/build.sh"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 OUT_DIR="${PROJECT_ROOT}"
 
@@ -95,19 +96,10 @@ info "Agent: ${AGENT_BIN} ($(du -sh "${AGENT_BIN}" | cut -f1))"
 # back to compiling on-server if it is missing.
 info "Building custom Caddy (GOOS=${GOOS} GOARCH=${GOARCH})..."
 
-if ! command -v xcaddy &>/dev/null && [[ ! -x "$(go env GOPATH)/bin/xcaddy" ]]; then
-    info "Installing xcaddy..."
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-fi
-XCADDY_BIN="$(command -v xcaddy 2>/dev/null || echo "$(go env GOPATH)/bin/xcaddy")"
-
 CGO_ENABLED=0 \
 GOOS="${GOOS}" \
 GOARCH="${GOARCH}" \
-"${XCADDY_BIN}" build \
-    --with github.com/mholt/caddy-l4 \
-    --with github.com/mholt/caddy-ratelimit \
-    --output "${CADDY_BIN}"
+build_caddy "${CADDY_BIN}"
 
 info "Caddy: ${CADDY_BIN} ($(du -sh "${CADDY_BIN}" | cut -f1))"
 

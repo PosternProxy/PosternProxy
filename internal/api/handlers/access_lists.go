@@ -38,12 +38,12 @@ func (h *AccessListHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	var input services.CreateAccessListInput
 	if err := decodeJSON(r, &input); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	al, err := h.svc.Create(r.Context(), &claims.UserID, input, r.RemoteAddr)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	respondJSON(w, http.StatusCreated, al)
@@ -81,12 +81,12 @@ func (h *AccessListHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	var input services.CreateAccessListInput
 	if err := decodeJSON(r, &input); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	al, err := h.svc.Update(r.Context(), &claims.UserID, id, input, r.RemoteAddr)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, al)
@@ -104,7 +104,7 @@ func (h *AccessListHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Delete(r.Context(), &claims.UserID, id, r.RemoteAddr); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

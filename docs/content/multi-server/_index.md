@@ -19,7 +19,7 @@ Browser → PosternProxy Controller (:81) → REST API → SQLite
                           ↓              ↓
                     Agent (Server A)   Agent (Server B)
                           ↓              ↓
-                     Caddy + iptables  Caddy + iptables
+                        Caddy            Caddy
 ```
 
 The agent makes an **outbound** WebSocket connection to the controller. No inbound ports are needed on the remote server beyond 80 and 443 (and SSH for provisioning).

@@ -32,6 +32,15 @@ The PosternProxy install script applies a comprehensive set of security hardenin
 
 DNS provider credentials and SSH credentials are encrypted at rest using AES-256-GCM with a key derived from the JWT secret.
 
+### Management UI behind a reverse proxy
+
+Set `POSTERNPROXY_TRUSTED_PROXIES` to the comma-separated IP CIDRs of the proxies
+that forward requests to the controller. Use only networks or addresses you
+control, and configure each trusted proxy to append its immediate peer to
+`X-Forwarded-For`. The controller accepts that header only from a trusted peer
+and walks the chain from right to left to identify the client for rate limits
+and logs. With the setting empty, the controller uses the direct peer address.
+
 ## OS-level hardening
 
 ### Systemd sandboxing

@@ -487,6 +487,12 @@ func (s *ServerService) ValidateAgentToken(ctx context.Context, serverID int64, 
 	return security.BcryptCompare(hash, token) == nil
 }
 
+func (s *ServerService) AuditResync(ctx context.Context, actorID, serverID int64, ip string) {
+	if err := s.audit.Log(ctx, &actorID, "resync", "server", &serverID, nil, ip); err != nil {
+		log.Error().Err(err).Int64("server_id", serverID).Msg("failed to audit configuration retry")
+	}
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 type serverScanner interface {

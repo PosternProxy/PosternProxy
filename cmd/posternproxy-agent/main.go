@@ -20,8 +20,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/posternproxy/posternproxy/internal/agent"
 	"github.com/posternproxy/posternproxy/internal/buildinfo"
-	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/posternproxy/posternproxy/internal/portforward"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -92,7 +90,7 @@ func (a *agentClient) run() {
 func (a *agentClient) connect() error {
 	u, err := url.Parse(a.controllerURL)
 	if err != nil {
-		return fmt.Errorf("parse controller URL: %w", err)
+		return fmt.Errorf("invalid controller URL")
 	}
 
 	// Convert http(s) to ws(s) if caller gave an HTTP URL.
@@ -102,20 +100,19 @@ func (a *agentClient) connect() error {
 	case "https":
 		u.Scheme = "wss"
 	}
+	if u.User != nil || u.Host == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return fmt.Errorf("invalid controller URL")
+	}
 	u.Path = "/ws/agent"
-	q := u.Query()
+	u.RawPath = ""
+	u.Fragment = ""
+	q := url.Values{}
 	q.Set("server_id", strconv.FormatInt(a.serverID, 10))
-	q.Set("token", a.token)
 	u.RawQuery = q.Encode()
 
-	// Redact the token before logging the connection URL.
-	logURL := *u
-	redactedQ := logURL.Query()
-	redactedQ.Set("token", "REDACTED")
-	logURL.RawQuery = redactedQ.Encode()
-	log.Info().Str("url", logURL.String()).Msg("connecting to controller")
+	log.Info().Str("controller_host", u.Host).Msg("connecting to controller")
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Authorization": {"Bearer " + a.token}})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -196,25 +193,6 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 			}
 		}
 
-	case agent.KindPortForwardApply:
-		var p agent.PortForwardPayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			pf := payloadToPortForward(p)
-			if err := portforward.ApplyRule(&pf); err != nil {
-				errMsg = err.Error()
-			} else {
-				success = true
-			}
-		}
-
-	case agent.KindPortForwardRemove:
-		var p agent.PortForwardPayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			pf := payloadToPortForward(p)
-			portforward.RemoveRule(&pf)
-			success = true
-		}
-
 	case agent.KindHealthCheck:
 		a.sendStatus(conn)
 		return
@@ -225,6 +203,8 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 	}
 
 	result, _ := agent.NewMessage(agent.KindCommandResult, agent.CommandResultPayload{
+		CommandID:   msg.ID,
+		Revision:    msg.Revision,
 		CommandKind: msg.Kind,
 		Success:     success,
 		Error:       errMsg,
@@ -324,18 +304,6 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-func payloadToPortForward(p agent.PortForwardPayload) models.PortForward {
-	return models.PortForward{
-		ID:           p.ID,
-		Protocol:     p.Protocol,
-		IncomingPort: p.IncomingPort,
-		ForwardHost:  p.ForwardHost,
-		ForwardPort:  p.ForwardPort,
-		Interface:    p.Interface,
-		Method:       p.Method,
-	}
-}
 
 // writeCerts writes custom certificate files to the agent's cert directory so
 // they are available on disk before the Caddy config that references them loads.

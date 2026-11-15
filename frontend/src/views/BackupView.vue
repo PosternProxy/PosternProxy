@@ -37,7 +37,9 @@ async function doImport() {
   showConfirm.value = false
   try {
     const result = await importBackup(importFile.value)
-    importSuccess.value = `Import successful — ${result.restored} record(s) restored.`
+    importSuccess.value = result.synced
+      ? `${result.restored} record(s) restored and configuration applied.`
+      : `${result.restored} record(s) restored. Configuration is still waiting to apply; check server configuration status.`
     importFile.value = null
     // Reset file input
     const input = document.getElementById('backup-file-input') as HTMLInputElement | null

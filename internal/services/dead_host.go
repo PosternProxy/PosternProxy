@@ -8,7 +8,6 @@ import (
 
 	"github.com/posternproxy/posternproxy/internal/caddy"
 	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/rs/zerolog/log"
 )
 
 // DeadHostService manages dead (404-returning) virtual hosts in SQLite and Caddy.
@@ -116,11 +115,8 @@ func (s *DeadHostService) Create(ctx context.Context, callerID *int64, input Cre
 	if err != nil {
 		return nil, err
 	}
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to apply dead host to Caddy")
-	}
-	s.audit.Log(ctx, callerID, "create", "dead_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "create", "dead_host", id, nil, host, ip)
+	return host, syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *DeadHostService) Update(ctx context.Context, callerID *int64, id int64, input CreateDeadHostInput, ip string) (*models.DeadHost, error) {
@@ -132,21 +128,24 @@ func (s *DeadHostService) Update(ctx context.Context, callerID *int64, id int64,
 		return nil, err
 	}
 
+	if input.ServerID == 0 {
+		input.ServerID = existing.ServerID
+	}
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE dead_hosts SET domain_names=?, status_code=?, custom_body=?, updated_at=datetime('now')
+		UPDATE dead_hosts SET server_id=?, domain_names=?, status_code=?, custom_body=?, updated_at=datetime('now')
 		WHERE id=?`,
-		string(input.DomainNames), input.StatusCode, input.CustomBody, id,
+		input.ServerID, string(input.DomainNames), input.StatusCode, input.CustomBody, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update dead host: %w", err)
 	}
 
-	host, _ := s.GetByID(ctx, id)
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to apply dead host to Caddy")
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	s.audit.Log(ctx, callerID, "update", "dead_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "update", "dead_host", id, existing, host, ip)
+	return host, syncServers(ctx, s.sync, existing.ServerID, host.ServerID)
 }
 
 func (s *DeadHostService) Delete(ctx context.Context, callerID *int64, id int64, ip string) error {
@@ -157,53 +156,38 @@ func (s *DeadHostService) Delete(ctx context.Context, callerID *int64, id int64,
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM dead_hosts WHERE id = ?", id); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
-	s.audit.Log(ctx, callerID, "delete", "dead_host", &id, nil, ip)
-	return nil
+	s.audit.HostChange(ctx, callerID, "delete", "dead_host", id, host, nil, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *DeadHostService) SetEnabled(ctx context.Context, callerID *int64, id int64, enabled bool, ip string) error {
+	before, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if before == nil {
+		return fmt.Errorf("host not found")
+	}
+
 	if _, err := s.db.ExecContext(ctx,
 		"UPDATE dead_hosts SET enabled=?, updated_at=datetime('now') WHERE id=?",
 		boolToInt(enabled), id,
 	); err != nil {
 		return fmt.Errorf("update enabled: %w", err)
 	}
-	host, _ := s.GetByID(ctx, id)
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if host == nil {
 		return fmt.Errorf("dead host not found")
-	}
-	if enabled {
-		if err := s.pushToCaddy(ctx, host); err != nil {
-			log.Error().Err(err).Int64("dead_host_id", id).Msg("failed to enable dead host in Caddy")
-		}
-	} else {
-		s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
 	}
 	action := "enable"
 	if !enabled {
 		action = "disable"
 	}
-	s.audit.Log(ctx, callerID, action, "dead_host", &id, nil, ip)
-	return nil
-}
-
-// pushToCaddy rebuilds the full config. Dead hosts are served on both the :80 and
-// :443 servers, so a single :443 patch can't represent them.
-func (s *DeadHostService) pushToCaddy(ctx context.Context, h *models.DeadHost) error {
-	if s.sync == nil {
-		return nil
-	}
-	return s.sync.SyncServer(ctx, h.ServerID)
-}
-
-func (s *DeadHostService) syncAfterDelete(ctx context.Context, serverID int64, _ string) {
-	if s.sync == nil {
-		return
-	}
-	if err := s.sync.SyncServer(ctx, serverID); err != nil {
-		log.Warn().Err(err).Int64("server_id", serverID).Msg("dead host: sync after delete failed")
-	}
+	s.audit.HostChange(ctx, callerID, action, "dead_host", id, before, host, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 // ── scan helpers ──────────────────────────────────────────────────────────────

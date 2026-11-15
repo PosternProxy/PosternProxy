@@ -61,7 +61,7 @@ The **Danger Zone** section at the bottom of the Settings page contains destruct
 
 | Action | Effect |
 |---|---|
-| **Restore Backup** | Replace the entire database with a backup file |
+| **Restore Backup** | Replace the exported configuration tables with data from a JSON file |
 | **Reset to defaults** | Delete all resources and reset to a clean install state |
 
 Both operations require password confirmation before executing.

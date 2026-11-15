@@ -42,13 +42,16 @@ for building the binaries on Linux or Windows.
 
 **Step 2 — Copy the binaries and the install script to the server**
 
-Put the three binaries and `install.sh` in one directory — the installer finds the
+Put the three binaries, `install.sh`, and the shared Caddy contract `caddy-build.sh`
+in one directory. Use `internal/caddybuild/build.sh` from the matching source
+revision as `caddy-build.sh`. The installer finds the
 binaries in the directory it runs from. The install script ships with the release;
 it is also available at `scripts/install.sh` in the repository.
 
 ```bash
 ssh root@your-server 'mkdir -p /tmp/posternproxy'
 scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
+scp internal/caddybuild/build.sh root@your-server:/tmp/posternproxy/caddy-build.sh
 ```
 
 Notes:
@@ -144,6 +147,7 @@ PosternProxy is configured via `/etc/posternproxy/config.env`. All variables are
 | `POSTERNPROXY_CADDY_API` | `http://localhost:2019` | Caddy admin API URL |
 | `POSTERNPROXY_CERT_DIR` | `/var/lib/posternproxy/certs` | Custom certificate storage |
 | `POSTERNPROXY_CONTROLLER_URL` | `http://<host-ip>:81` | URL agents use to connect |
+| `POSTERNPROXY_TRUSTED_PROXIES` | Empty | Comma-separated proxy CIDRs trusted to supply `X-Forwarded-For`. See [Security Hardening]({{< relref "/administration/security-hardening" >}}). |
 | `POSTERNPROXY_AGENT_BIN_PATH` | `/usr/local/bin/posternproxy-agent` | Agent binary for provisioning |
 | `POSTERNPROXY_ADMIN_EMAIL` | `admin@posternproxy.local` | Initial admin email (first boot only) |
 | `POSTERNPROXY_ADMIN_PASSWORD` | *(random generated)* | Initial admin password (first boot only — printed to stderr if not set) |

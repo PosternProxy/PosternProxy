@@ -47,7 +47,8 @@ Passwords must be at least 8 characters. PosternProxy hashes them with bcrypt at
 
 ### Deactivating a user
 
-Toggle the **Active** switch on a user to disable their account. Deactivated users cannot log in and any existing sessions are invalidated. Their API tokens continue to exist but will be rejected.
+Toggle the **Active** switch on a user to disable their account. Disabling an
+account revokes its sessions and API tokens.
 
 ### Deleting a user
 
@@ -89,7 +90,12 @@ docker exec posternproxy posternproxy reset-password
 
 ## Session management
 
-Sessions use JWT access tokens (15-minute TTL) and refresh tokens (7-day TTL) stored in HttpOnly, Secure, SameSite=Strict cookies. Sessions expire automatically and are not tracked server-side (stateless JWT).
+The controller tracks sessions server-side. JWT access tokens last 15 minutes,
+and refresh tokens last 7 days. The refresh cookie is HttpOnly and
+SameSite=Strict, with Secure enabled when configured. Each refresh rotates the
+refresh token. Signing out revokes the current session. Password changes and
+changes to the account's role or active status revoke its sessions and API
+tokens.
 
 ## Notes
 

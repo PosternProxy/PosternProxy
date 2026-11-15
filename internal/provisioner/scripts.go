@@ -41,11 +41,10 @@ log "Go: $(go version)"
 ### 3. Build Caddy with L4 module ###
 if ! command -v caddy &>/dev/null; then
   log "Building Caddy with layer4 module..."
-  go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest 2>/dev/null || true
-  XCADDY=$(go env GOPATH)/bin/xcaddy
-  $XCADDY build --with github.com/mholt/caddy-l4 --output /usr/local/bin/caddy
+  build_caddy /usr/local/bin/caddy
   chmod 755 /usr/local/bin/caddy
 fi
+verify_caddy "$(command -v caddy)"
 log "Caddy: $(caddy version)"
 
 ### 4. Create users ###

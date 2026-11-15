@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue'
-import type { StreamHost, PortForward } from '@/types'
+import type { StreamHost } from '@/types'
 import {
   listStreamHosts,
   createStreamHost,
@@ -9,25 +9,14 @@ import {
   enableStreamHost,
   disableStreamHost,
 } from '@/api/streamHosts'
-import {
-  listPortForwards,
-  createPortForward,
-  updatePortForward,
-  deletePortForward,
-  enablePortForward,
-  disablePortForward,
-  type CreatePortForwardInput,
-} from '@/api/portForwards'
 import { useServerStore } from '@/stores/servers'
 import { useServerContext } from '@/stores/serverContext'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 
-type ForwardingMethod = 'caddy' | 'iptables' | 'socat'
 type ForwardingProtocol = 'tcp' | 'udp' | 'tcp+udp'
 
 interface Rule {
   _id: number
-  _source: ForwardingMethod
   incoming_port: number
   forward_host: string
   forward_port: number
@@ -35,7 +24,6 @@ interface Rule {
   enabled: boolean
   server_id: number
   tcp_sni_match?: string | null
-  iface?: string
 }
 
 const serverStore = useServerStore()
@@ -56,26 +44,7 @@ const deletingRule = ref<Rule | null>(null)
 const deleting = ref(false)
 const deleteError = ref('')
 
-const method = ref<ForwardingMethod>('caddy')
 const protocols: ForwardingProtocol[] = ['tcp', 'udp', 'tcp+udp']
-
-const methodCards: { value: ForwardingMethod; label: string; description: string }[] = [
-  {
-    value: 'caddy',
-    label: 'Caddy Layer 4',
-    description: "Routes through Caddy's built-in proxy. No extra tools needed.",
-  },
-  {
-    value: 'iptables',
-    label: 'iptables',
-    description: 'Kernel-level NAT. Fastest, survives Caddy restarts. Requires root.',
-  },
-  {
-    value: 'socat',
-    label: 'socat',
-    description: 'Userspace relay. Good fallback. No root needed for high ports.',
-  },
-]
 
 const defaultForm = (): {
   server_id: number
@@ -84,7 +53,6 @@ const defaultForm = (): {
   forward_port: number
   protocol: ForwardingProtocol
   tcp_sni_match: string
-  iface: string
 } => ({
   server_id: 1,
   incoming_port: 0,
@@ -92,7 +60,6 @@ const defaultForm = (): {
   forward_port: 0,
   protocol: 'tcp',
   tcp_sni_match: '',
-  iface: '',
 })
 
 const form = reactive(defaultForm())
@@ -108,40 +75,21 @@ async function fetchRules() {
   loading.value = true
   error.value = ''
   try {
-    const [streams, forwards] = await Promise.all([
-      listStreamHosts(ctx.selectedServerId),
-      listPortForwards(ctx.selectedServerId),
-    ])
-    const mapped: Rule[] = [
-      ...streams.map(
+    const streams = await listStreamHosts(ctx.selectedServerId)
+    rules.value = streams
+      .map(
         (s: StreamHost): Rule => ({
           _id: s.id,
-          _source: 'caddy',
           incoming_port: s.incoming_port,
           forward_host: s.forward_host,
           forward_port: s.forward_port,
-          protocol: s.protocol,
+          protocol: s.protocol as ForwardingProtocol,
           enabled: s.enabled,
           server_id: s.server_id,
           tcp_sni_match: s.tcp_sni_match,
         })
-      ),
-      ...forwards.map(
-        (f: PortForward): Rule => ({
-          _id: f.id,
-          _source: f.method as ForwardingMethod,
-          incoming_port: f.incoming_port,
-          forward_host: f.forward_host,
-          forward_port: f.forward_port,
-          protocol: f.protocol,
-          enabled: f.enabled,
-          server_id: f.server_id,
-          iface: f.interface,
-        })
-      ),
-    ]
-    mapped.sort((a, b) => a.incoming_port - b.incoming_port)
-    rules.value = mapped
+      )
+      .sort((a, b) => a.incoming_port - b.incoming_port)
   } catch {
     error.value = 'Failed to load forwarding rules.'
   } finally {
@@ -153,7 +101,6 @@ function openCreate() {
   modalMode.value = 'create'
   editingRule.value = null
   saveError.value = ''
-  method.value = 'caddy'
   Object.assign(form, { ...defaultForm(), server_id: ctx.selectedServerId })
   showModal.value = true
 }
@@ -162,7 +109,6 @@ function openEdit(rule: Rule) {
   modalMode.value = 'edit'
   editingRule.value = rule
   saveError.value = ''
-  method.value = rule._source
   Object.assign(form, {
     server_id: rule.server_id,
     incoming_port: rule.incoming_port,
@@ -170,18 +116,12 @@ function openEdit(rule: Rule) {
     forward_port: rule.forward_port,
     protocol: rule.protocol,
     tcp_sni_match: rule.tcp_sni_match ?? '',
-    iface: rule.iface ?? '',
   })
   showModal.value = true
 }
 
 function closeModal() {
   showModal.value = false
-}
-
-function setMethod(m: ForwardingMethod) {
-  if (modalMode.value === 'edit') return
-  method.value = m
 }
 
 async function saveForm() {
@@ -200,34 +140,18 @@ async function saveForm() {
   saving.value = true
   saveError.value = ''
   try {
-    if (method.value === 'caddy') {
-      const payload = {
-        server_id: form.server_id || 1,
-        incoming_port: Number(form.incoming_port),
-        forward_host: form.forward_host,
-        forward_port: Number(form.forward_port),
-        protocol: form.protocol,
-        tcp_sni_match: form.tcp_sni_match || null,
-      }
-      if (modalMode.value === 'create') {
-        await createStreamHost(payload)
-      } else if (editingRule.value) {
-        await updateStreamHost(editingRule.value._id, payload)
-      }
-    } else {
-      const payload: CreatePortForwardInput = {
-        protocol: form.protocol,
-        incoming_port: Number(form.incoming_port),
-        forward_host: form.forward_host,
-        forward_port: Number(form.forward_port),
-        interface: form.iface,
-        method: method.value,
-      }
-      if (modalMode.value === 'create') {
-        await createPortForward(payload)
-      } else if (editingRule.value) {
-        await updatePortForward(editingRule.value._id, payload)
-      }
+    const payload = {
+      server_id: form.server_id || 1,
+      incoming_port: Number(form.incoming_port),
+      forward_host: form.forward_host,
+      forward_port: Number(form.forward_port),
+      protocol: form.protocol,
+      tcp_sni_match: form.tcp_sni_match || null,
+    }
+    if (modalMode.value === 'create') {
+      await createStreamHost(payload)
+    } else if (editingRule.value) {
+      await updateStreamHost(editingRule.value._id, payload)
     }
     await fetchRules()
     closeModal()
@@ -240,13 +164,8 @@ async function saveForm() {
 
 async function toggleEnabled(rule: Rule) {
   try {
-    if (rule._source === 'caddy') {
-      if (rule.enabled) await disableStreamHost(rule._id)
-      else await enableStreamHost(rule._id)
-    } else {
-      if (rule.enabled) await disablePortForward(rule._id)
-      else await enablePortForward(rule._id)
-    }
+    if (rule.enabled) await disableStreamHost(rule._id)
+    else await enableStreamHost(rule._id)
     rule.enabled = !rule.enabled
   } catch {
     /* ignore */
@@ -265,11 +184,7 @@ async function doDelete() {
   deleteError.value = ''
   const target = deletingRule.value
   try {
-    if (target._source === 'caddy') {
-      await deleteStreamHost(target._id)
-    } else {
-      await deletePortForward(target._id)
-    }
+    await deleteStreamHost(target._id)
     rules.value = rules.value.filter((r) => r !== target)
     showDeleteConfirm.value = false
   } catch (e: unknown) {
@@ -287,24 +202,6 @@ function protocolBadgeClass(proto: string): string {
   }
   return map[proto] ?? 'bg-slate-100 text-slate-600'
 }
-
-function viaBadgeClass(source: ForwardingMethod): string {
-  const map: Record<ForwardingMethod, string> = {
-    caddy: 'bg-indigo-100 text-indigo-700',
-    iptables: 'bg-amber-100 text-amber-700',
-    socat: 'bg-teal-100 text-teal-700',
-  }
-  return map[source]
-}
-
-function viaLabel(source: ForwardingMethod): string {
-  const map: Record<ForwardingMethod, string> = {
-    caddy: 'Caddy L4',
-    iptables: 'iptables',
-    socat: 'socat',
-  }
-  return map[source]
-}
 </script>
 
 <template>
@@ -315,7 +212,7 @@ function viaLabel(source: ForwardingMethod): string {
         <h2 class="text-xl font-semibold text-slate-800">Traffic Forwarding</h2>
         <p class="mt-0.5 text-sm text-slate-500">
           Forward raw TCP or UDP traffic to any backend — databases, MQTT brokers, SSH, game
-          servers, and anything that isn't HTTP.
+          servers, and anything that isn't HTTP. Powered by Caddy Layer 4.
         </p>
       </div>
       <button
@@ -324,6 +221,14 @@ function viaLabel(source: ForwardingMethod): string {
       >
         + Add Rule
       </button>
+    </div>
+
+    <!-- Firewall reminder -->
+    <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+      <span class="font-medium">Firewall:</span> each forwarded port must be allowed through the
+      server's firewall, e.g. <code class="rounded bg-amber-100 px-1 font-mono">sudo ufw allow 25565/tcp</code>.
+      If your server sits behind a cloud firewall (DigitalOcean, AWS, etc.), open the port there too —
+      PosternProxy can't manage those.
     </div>
 
     <div v-if="error" class="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
@@ -340,7 +245,7 @@ function viaLabel(source: ForwardingMethod): string {
     >
       <p class="text-sm font-medium text-slate-500">No forwarding rules configured yet.</p>
       <p class="mt-1 text-xs text-slate-400">
-        Use Caddy Layer 4 for TLS-aware proxying, or iptables/socat for kernel-level forwarding.
+        Forward a TCP/UDP port to any backend — Caddy handles the proxying.
       </p>
     </div>
 
@@ -352,7 +257,6 @@ function viaLabel(source: ForwardingMethod): string {
             <th class="px-4 py-3 font-medium text-slate-600">Port</th>
             <th class="px-4 py-3 font-medium text-slate-600">Forward To</th>
             <th class="px-4 py-3 font-medium text-slate-600">Protocol</th>
-            <th class="px-4 py-3 font-medium text-slate-600">Via</th>
             <th class="px-4 py-3 font-medium text-slate-600">Status</th>
             <th class="px-4 py-3 text-right font-medium text-slate-600">Actions</th>
           </tr>
@@ -360,7 +264,7 @@ function viaLabel(source: ForwardingMethod): string {
         <tbody class="divide-y divide-slate-100">
           <tr
             v-for="rule in rules"
-            :key="`${rule._source}-${rule._id}`"
+            :key="rule._id"
             class="transition-colors hover:bg-slate-50"
             :class="{ 'opacity-50': !rule.enabled }"
           >
@@ -384,14 +288,6 @@ function viaLabel(source: ForwardingMethod): string {
               </span>
             </td>
             <td class="px-4 py-3">
-              <span
-                class="rounded px-2 py-0.5 text-xs font-medium"
-                :class="viaBadgeClass(rule._source)"
-              >
-                {{ viaLabel(rule._source) }}
-              </span>
-            </td>
-            <td class="px-4 py-3">
               <button
                 class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
                 :class="
@@ -405,7 +301,7 @@ function viaLabel(source: ForwardingMethod): string {
                   class="h-1.5 w-1.5 rounded-full"
                   :class="rule.enabled ? 'bg-emerald-500' : 'bg-slate-400'"
                 />
-                {{ rule.enabled ? 'Active' : 'Inactive' }}
+                {{ rule.enabled ? 'Enabled' : 'Disabled' }}
               </button>
             </td>
             <td class="px-4 py-3 text-right">
@@ -459,34 +355,6 @@ function viaLabel(source: ForwardingMethod): string {
           <div class="space-y-4 overflow-y-auto px-6 py-5" style="max-height: 65vh">
             <div v-if="saveError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">
               {{ saveError }}
-            </div>
-
-            <!-- Method cards -->
-            <div>
-              <label class="mb-2 block text-sm font-medium text-slate-700">
-                Forwarding Method
-                <span v-if="modalMode === 'edit'" class="ml-1 text-xs font-normal text-slate-400"
-                  >(cannot be changed after creation)</span
-                >
-              </label>
-              <div class="grid grid-cols-3 gap-2">
-                <button
-                  v-for="m in methodCards"
-                  :key="m.value"
-                  type="button"
-                  class="rounded-xl border-2 p-3 text-left transition-colors"
-                  :class="[
-                    method === m.value
-                      ? 'border-indigo-500 bg-indigo-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300',
-                    modalMode === 'edit' ? 'cursor-default opacity-70' : 'cursor-pointer',
-                  ]"
-                  @click="setMethod(m.value)"
-                >
-                  <div class="text-xs font-semibold text-slate-800">{{ m.label }}</div>
-                  <div class="mt-0.5 text-xs leading-snug text-slate-500">{{ m.description }}</div>
-                </button>
-              </div>
             </div>
 
             <!-- Incoming port -->
@@ -548,11 +416,11 @@ function viaLabel(source: ForwardingMethod): string {
               </div>
             </div>
 
-            <!-- Caddy L4: SNI match -->
-            <div v-if="method === 'caddy'">
+            <!-- SNI match (TLS only) -->
+            <div>
               <label class="mb-1 block text-sm font-medium text-slate-700">
                 SNI Match
-                <span class="text-xs font-normal text-slate-400">(optional)</span>
+                <span class="text-xs font-normal text-slate-400">(optional, TLS only)</span>
               </label>
               <input
                 v-model="form.tcp_sni_match"
@@ -562,43 +430,21 @@ function viaLabel(source: ForwardingMethod): string {
               />
               <p class="mt-1 text-xs text-slate-400">
                 Only route TLS connections matching this hostname. Leave blank to forward all
-                traffic.
+                traffic on the port.
               </p>
             </div>
 
-            <!-- iptables: network interface -->
-            <div v-if="method === 'iptables'">
-              <label class="mb-1 block text-sm font-medium text-slate-700">
-                Network Interface
-                <span class="text-xs font-normal text-slate-400">(optional)</span>
-              </label>
-              <input
-                v-model="form.iface"
-                type="text"
-                placeholder="eth0"
-                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <p class="mt-1 text-xs text-slate-400">
-                Restrict the iptables rule to a specific interface. Leave blank for all interfaces.
-              </p>
-            </div>
-
-            <!-- Method info banners -->
+            <!-- Firewall reminder -->
             <div
-              v-if="method === 'iptables'"
               class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800"
             >
-              <span class="font-medium">iptables</span> writes DNAT + MASQUERADE rules to the kernel
-              NAT table. Requires
-              <code class="rounded bg-amber-100 px-0.5 font-mono">CAP_NET_ADMIN</code>. Rules are
-              restored automatically on startup.
-            </div>
-            <div
-              v-else-if="method === 'socat'"
-              class="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-xs text-teal-700"
-            >
-              <span class="font-medium">socat</span> spawns a child process on the server. It is
-              automatically restarted when the application restarts.
+              <span class="font-medium">Remember the firewall.</span> After creating this rule, allow
+              the port through the server's firewall:
+              <code class="rounded bg-amber-100 px-1 font-mono"
+                >sudo ufw allow {{ form.incoming_port || 'PORT' }}/{{
+                  form.protocol === 'tcp+udp' ? 'tcp && sudo ufw allow ' + (form.incoming_port || 'PORT') + '/udp' : form.protocol
+                }}</code
+              >. Open the same port on any upstream/cloud firewall too.
             </div>
           </div>
 

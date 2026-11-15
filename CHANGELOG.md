@@ -5,10 +5,59 @@ All notable changes to PosternProxy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project intends to use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.1.3-beta] 2026-11-15
+
+This release remains in beta. Upgrade the controller and agents together.
+In-place upgrades from published earlier beta databases are still unqualified.
+See the [beta upgrade and recovery guide](https://docs.posternproxy.com/administration/upgrading/).
+
+### Added
+
+- Release qualification foundations: frozen schema baseline tests, a disposable
+  browser smoke harness, and live Caddy acceptance/CI checks.
+- Persistent desired/applied configuration revisions, correlated agent results,
+  automatic reconciliation on reconnect/restart, and a configuration status
+  notice with admin retry. Restore reports application state separately from
+  saved data. Live acceptance covers two outbound agents and controller restart.
+
+### Fixed
+
+- Access lists no longer block configuration generation on SQLite's single
+  connection, and list changes trigger configuration synchronization.
+- Host create/edit/disable/delete now report rejected configuration application
+  while retaining saved desired state for retry; host moves synchronize both
+  the old and new server. Host audit entries include safe before/after fields.
+- Configuration history snapshots are encrypted at rest, including legacy
+  snapshots protected during startup, and history listings omit their contents.
+- Management token scopes come from validated credentials and cannot be elevated
+  through headers or token minting. Account/password changes revoke existing
+  credentials; sessions rotate refresh tokens and revoke on logout.
+- Forwarding headers are accepted only from configured trusted proxy CIDRs.
+  Agent authentication uses Authorization, and structured request logs omit
+  credential-bearing URLs and headers. Controller and agents must be upgraded
+  together; older query-token agents are rejected.
+
+### Changed
+
+- Traffic Forwarding now uses Caddy L4 stream hosts. The legacy iptables,
+  socat, and `/api/port-forwards` paths were removed.
+- Build scripts, Docker images, installers, and SSH provisioning share pinned
+  Caddy, L4, rate-limit, and xcaddy versions. Installers reject incompatible
+  existing Caddy builds, including builds missing required plugins.
+- Documented the beta schema baseline and recovery limits; corrected unsupported
+  Basic Auth, backup portability, and security rate-limit claims.
+- Updated the docs site for scoped API tokens, session revocation, trusted
+  proxies, coordinated agent upgrades, pinned Caddy provisioning, and rollback.
+
 ## [0.1.2-beta] 2026-06-20
 
 ### Added
 
+- A firewall reminder in the Traffic Forwarding UI and docs: each forwarded port
+  must be opened in the host firewall (ufw) and any upstream/cloud firewall, which
+  PosternProxy does not manage.
 - HTTP/2 is now a per-server setting (the Local controller and each remote managed
   server can differ), toggled on the Servers page. It replaces the old per-host
   HTTP/2 toggle, which never did anything (HTTP/2 is a property of the shared HTTPS
@@ -91,6 +140,10 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The **Docker** deployment option is hidden in the Add Remote Server wizard;
+  remote servers are provisioned via systemd only. Docker agent provisioning
+  isn't ready yet and would fail. The `deployment_type` field still defaults to
+  `systemd`, and the backend keeps the `docker` code path for when it's ready.
 - The management UI favicon now uses the PosternProxy mark instead of the
   default Vue icon.
 - Caddy sync failures in the host services are now logged as structured warnings
@@ -98,6 +151,10 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The **iptables** and **socat** port-forwarding methods, end-to-end (controller,
+  agent, `internal/portforward`, the `port_forwards` table, API routes, and docs).
+  Traffic Forwarding is now Caddy Layer 4 only — it covers every real-world
+  TCP/UDP forwarding case and removes the OS-level privilege/firewall complexity.
 - The per-proxy-host **WebSocket Support** and **HTTP/2** toggles, which were
   no-ops. Removed end-to-end: UI controls, model fields, and the
   `proxy_hosts.http2_support` / `proxy_hosts.websocket_support` columns (folded
@@ -172,5 +229,6 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 - Commercial licensing docs updated with real contact email.
 - Install script post-install message now correctly directs users to service logs for the generated password.
 
-[Unreleased]: https://github.com/posternproxy/posternproxy/commits/master
+[Unreleased]: https://github.com/PosternProxy/PosternProxy/compare/v0.1.3-beta...master
+[0.1.3-beta]: https://github.com/PosternProxy/PosternProxy/releases/tag/v0.1.3-beta
 [0.1.0-beta.1]: https://github.com/posternproxy/posternproxy/releases/tag/v0.1.0-beta.1

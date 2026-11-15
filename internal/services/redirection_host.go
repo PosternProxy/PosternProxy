@@ -8,7 +8,6 @@ import (
 
 	"github.com/posternproxy/posternproxy/internal/caddy"
 	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/rs/zerolog/log"
 )
 
 // RedirectionHostService manages HTTP redirection virtual hosts in SQLite and Caddy.
@@ -135,11 +134,8 @@ func (s *RedirectionHostService) Create(ctx context.Context, callerID *int64, in
 	if err != nil {
 		return nil, err
 	}
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to apply redirection host to Caddy")
-	}
-	s.audit.Log(ctx, callerID, "create", "redirection_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "create", "redirection_host", id, nil, host, ip)
+	return host, syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *RedirectionHostService) Update(ctx context.Context, callerID *int64, id int64, input CreateRedirectionHostInput, ip string) (*models.RedirectionHost, error) {
@@ -154,24 +150,28 @@ func (s *RedirectionHostService) Update(ctx context.Context, callerID *int64, id
 		return nil, fmt.Errorf("forward domain name is required")
 	}
 
+	if input.ServerID == 0 {
+		input.ServerID = existing.ServerID
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE redirection_hosts SET
+		  server_id=?,
 		  domain_names=?, forward_scheme=?, forward_domain_name=?, forward_path=?,
 		  preserve_path=?, status_code=?, updated_at=datetime('now')
 		WHERE id=?`,
-		string(input.DomainNames), input.ForwardScheme, input.ForwardDomainName, input.ForwardPath,
+		input.ServerID, string(input.DomainNames), input.ForwardScheme, input.ForwardDomainName, input.ForwardPath,
 		boolToInt(input.PreservePath), input.StatusCode, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update redirection host: %w", err)
 	}
 
-	host, _ := s.GetByID(ctx, id)
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to apply redirection host to Caddy")
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	s.audit.Log(ctx, callerID, "update", "redirection_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "update", "redirection_host", id, existing, host, ip)
+	return host, syncServers(ctx, s.sync, existing.ServerID, host.ServerID)
 }
 
 func (s *RedirectionHostService) Delete(ctx context.Context, callerID *int64, id int64, ip string) error {
@@ -182,69 +182,38 @@ func (s *RedirectionHostService) Delete(ctx context.Context, callerID *int64, id
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM redirection_hosts WHERE id = ?", id); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
-	s.audit.Log(ctx, callerID, "delete", "redirection_host", &id, nil, ip)
-	return nil
+	s.audit.HostChange(ctx, callerID, "delete", "redirection_host", id, host, nil, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *RedirectionHostService) SetEnabled(ctx context.Context, callerID *int64, id int64, enabled bool, ip string) error {
+	before, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if before == nil {
+		return fmt.Errorf("host not found")
+	}
+
 	if _, err := s.db.ExecContext(ctx,
 		"UPDATE redirection_hosts SET enabled=?, updated_at=datetime('now') WHERE id=?",
 		boolToInt(enabled), id,
 	); err != nil {
 		return fmt.Errorf("update enabled: %w", err)
 	}
-	host, _ := s.GetByID(ctx, id)
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if host == nil {
 		return fmt.Errorf("redirection host not found")
-	}
-	if enabled {
-		if err := s.pushToCaddy(ctx, host); err != nil {
-			log.Error().Err(err).Int64("redirection_host_id", id).Msg("failed to enable redirection host in Caddy")
-		}
-	} else {
-		s.syncAfterDelete(ctx, host.ServerID, host.CaddyID)
 	}
 	action := "enable"
 	if !enabled {
 		action = "disable"
 	}
-	s.audit.Log(ctx, callerID, action, "redirection_host", &id, nil, ip)
-	return nil
-}
-
-func (s *RedirectionHostService) pushToCaddy(ctx context.Context, h *models.RedirectionHost) error {
-	if s.sync == nil {
-		return nil
-	}
-	// Remote, or local-but-not-SSL-forced (served on both :80 and :443) can't be
-	// expressed as one incremental :443 patch — rebuild the full config. Only a
-	// local SSL-forced redirect is a single :443 route we can patch in place.
-	if h.ServerID != 1 || !h.SSLForced {
-		return s.sync.SyncServer(ctx, h.ServerID)
-	}
-	return s.sync.applyLocalOrResync(ctx, func() error {
-		route, err := caddy.BuildRedirectionHostRoute(h)
-		if err != nil {
-			return fmt.Errorf("build route: %w", err)
-		}
-		if err := s.caddy.PatchPath("apps/http/servers/https/routes/id/"+h.CaddyID, route); err == nil {
-			return nil
-		}
-		return s.caddy.AppendToArray("apps/http/servers/https/routes", route)
-	})
-}
-
-// syncAfterDelete rebuilds the full config from the post-change DB state. A
-// redirect can live on both the :80 and :443 servers, so a delete-by-@id can't
-// reliably remove it; a full resync is correct and simple.
-func (s *RedirectionHostService) syncAfterDelete(ctx context.Context, serverID int64, _ string) {
-	if s.sync == nil {
-		return
-	}
-	if err := s.sync.SyncServer(ctx, serverID); err != nil {
-		log.Warn().Err(err).Int64("server_id", serverID).Msg("redirection host: sync after delete failed")
-	}
+	s.audit.HostChange(ctx, callerID, action, "redirection_host", id, before, host, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 // ── scan helpers ──────────────────────────────────────────────────────────────
