@@ -39,15 +39,27 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "no settings provided")
 		return
 	}
+	claims := requireClaims(w, r)
+	if claims == nil {
+		return
+	}
+	actor := &claims.UserID
+	// Snapshot current state before the write so the audit record carries a
+	// before/after diff. A read failure must not block the edit; a nil before
+	// snapshot still produces a usable audit entry.
+	before, _ := h.svc.GetAll(r.Context())
 	if err := h.svc.SetBulk(r.Context(), updates); err != nil {
+		// On rejection nothing changed; record the attempted values as "after".
+		h.svc.AuditChange(r.Context(), actor, false, before, updates, r.RemoteAddr)
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Return the fresh full settings map.
+	// Return the fresh full settings map, and audit the applied after-state.
 	settings, err := h.svc.GetAll(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.svc.AuditChange(r.Context(), actor, true, before, settings, r.RemoteAddr)
 	respondJSON(w, http.StatusOK, settings)
 }

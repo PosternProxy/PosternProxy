@@ -22,12 +22,17 @@ Whether a proxy host is reachable over HTTP, HTTPS, or both depends on the
 This means a newly added host works right away over HTTP; turn on Force HTTPS (or
 assign a certificate) when you are ready to serve it over TLS.
 
+The separate **HTTP Only** option forces the host onto the plain-HTTP route and
+excludes it from the normal HTTPS grouping. Check configuration application
+status after changing any of these options.
+
 ## Automatic Let's Encrypt
 
-Enable **Force HTTPS** (or assign a certificate) to have Caddy obtain and renew a
-Let's Encrypt certificate automatically. Caddy will:
+Enable **Force HTTPS** without assigning a custom certificate to use automatic
+issuance. When a custom certificate is assigned, Caddy loads that certificate
+instead. For automatic certificates, Caddy will:
 
-1. Obtain a certificate from Let's Encrypt the first time a request arrives for the domain
+1. Manage certificate issuance for the configured public domains
 2. Store the certificate in its managed certificate store
 3. Renew automatically before expiry
 
@@ -53,8 +58,8 @@ Let's Encrypt certificate automatically if none is assigned.
 {{< hint info >}}
 **Without Force HTTPS**  
 The host is served over plain HTTP and is *not* redirected. Caddy only requests a
-Let's Encrypt certificate when Force HTTPS is on or a certificate is assigned, so
-a host with Force HTTPS off will never fail on ACME for a non-public domain.
+Let's Encrypt certificate for this normal proxy-host path when Force HTTPS is on
+and no custom certificate is supplied. HTTP-only hosts do not request one.
 {{< /hint >}}
 
 ## HSTS

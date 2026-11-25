@@ -5,85 +5,57 @@ weight: 130
 
 # Audit Log
 
-The Audit Log records every configuration change, login attempt, and administrative action. It is available to administrators at **Audit Log** in the sidebar.
+The Audit Log displays recorded management actions. The UI and API are restricted to administrators.
 
-## What is logged
+## Recorded events
 
-| Event type | Examples |
-|---|---|
-| **Auth events** | Login success, login failure, logout, token creation/deletion |
-| **Proxy host mutations** | Create, update, delete, enable, disable |
-| **Redirection host mutations** | Create, update, delete, enable, disable |
-| **Stream host mutations** | Create, update, delete, enable, disable, including Traffic Forwarding rules |
-| **Dead host mutations** | Create, update, delete, enable, disable |
-| **Certificate events** | Create, upload, renew, delete |
-| **Access list mutations** | Create, update, delete |
-| **User mutations** | Create, update, delete, password change |
-| **Settings changes** | Any settings key updated |
-| **Backup/restore** | Backup downloaded, restore completed |
+Implemented audit calls cover host creation, edits, deletion and enable/disable;
+access-list and custom-certificate mutations; user changes and password resets;
+server changes and sync requests; successful/failed login; and join-token issue
+and revocation. Host changes include a safe subset of before/after fields.
 
-## Log entry fields
+Settings update outcomes, backup export/restore, API-token creation/revocation,
+logout, provisioning outcomes and enrollment rotation also create attributed,
+redacted audit entries. Credential values and backup passphrases are excluded.
+Most audit writes remain best-effort; failed privileged requests are not recorded
+uniformly, and this is not a complete compliance trail.
 
-Each audit log entry contains:
+## Fields and filters
 
-| Field | Description |
-|---|---|
-| **Timestamp** | When the action occurred (UTC) |
-| **User** | Name and email of the user who performed the action |
-| **Action** | The operation (`create`, `update`, `delete`, `login`, etc.) |
-| **Resource Type** | What kind of resource was affected (`proxy_host`, `user`, etc.) |
-| **Resource ID** | ID of the specific resource |
-| **Details** | JSON payload with the relevant change data |
-| **IP Address** | Client IP of the request |
+Records contain a timestamp, actor user ID when known, action, resource type/ID,
+JSON details, and client IP. The UI shows time, action, resource, details and IP;
+it does not resolve every actor ID into a name/email column.
 
-## Filtering
-
-Use the filters at the top of the Audit Log page to narrow results:
-
-- **Resource type** — show only events for a specific resource type
-- **Action** — filter by operation type
-- **User** — filter by user
-- **Date range** — start and end date
-- **Server** (in multi-server mode) — filter by server
-
-<!-- TODO: Screenshot — Audit Log page with filters applied -->
-
-## Pagination
-
-The Audit Log is paginated at 50 entries per page. Use the page controls to navigate. Results are always shown newest-first.
-
-## API access
+The current UI and API support **resource type** filtering and pagination.
+There are no action, user, date-range, or server filters exposed by this handler.
+The UI uses 50 entries per page, newest first.
 
 ```bash
-# Get the last 50 audit log entries
-curl -H "Authorization: Bearer <token>" \
-     "http://your-server:81/api/audit-log?page=1&limit=50"
+curl -H "Authorization: Bearer <read-token>" \
+  'http://your-server:81/api/audit-log?page=1&limit=50'
 
-# Filter by resource type
-curl -H "Authorization: Bearer <token>" \
-     "http://your-server:81/api/audit-log?resource_type=proxy_host"
+curl -H "Authorization: Bearer <read-token>" \
+  'http://your-server:81/api/audit-log?resource_type=proxy_host&page=1&limit=50'
 ```
 
-## Retention
+## Retention and export
 
-Audit log entries are retained indefinitely. There is no automatic purge. If the log grows very large, you can export and truncate it manually:
-
-```bash
-# Export (via API)
-curl -H "Authorization: Bearer <token>" \
-     "http://your-server:81/api/audit-log?limit=0" > audit-export.json
-
-# Truncate (via SQLite)
-sqlite3 /var/lib/posternproxy/posternproxy.db \
-    "DELETE FROM audit_log WHERE created_at < datetime('now', '-1 year');"
-```
+No automatic purge is implemented. To export through the API, iterate through
+pages using the returned `total`, `page`, and `limit` fields. `limit=0` selects
+the default page size; it does not export the entire log. Preserve a consistent,
+access-restricted database backup before any manual retention work.
 
 ## fail2ban integration
 
-The install script configures fail2ban to watch the audit log for failed login attempts. After 5 failures from the same IP within 10 minutes, that IP is banned for 1 hour. The ban is applied via iptables.
-
-To view current bans:
+New controller installations configure fail2ban to read structured failed-login
+**request logs** in `/var/log/posternproxy/posternproxy.log`, not SQLite audit
+records. The default jail bans an IP on the management port after 5 matching
+failures in 60 seconds for 1 hour. Existing filter/jail customizations are kept.
 
 ```bash
-fail2ban-client status posternproxy
+sudo fail2ban-client status posternproxy
 ```
+
+The installed service enables JSON logging for this filter. Changing log format
+requires updating the filter too. See
+[Security Hardening]({{< relref "/administration/security-hardening" >}}).

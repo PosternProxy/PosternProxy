@@ -5,54 +5,38 @@ weight: 110
 
 # Nginx Config Import
 
-PosternProxy can parse existing Nginx configuration files and convert them into proxy hosts. This makes migrating from Nginx Proxy Manager or a custom Nginx setup significantly faster.
+Administrators can upload an Nginx configuration file and preview the proxy and
+redirection hosts detected by the parser. Open **Import Nginx** in the sidebar.
 
-## How to import
+## Importing
 
-1. Go to **Settings → Import from Nginx**
-2. Paste or upload your Nginx configuration (one or more `server {}` blocks)
-3. Click **Parse** — PosternProxy shows a preview of the hosts it detected
-4. Review the preview. Edit or deselect entries you do not want to import.
-5. Click **Import Selected**
+1. Click **Choose File**, or drag a configuration file onto the upload area.
+2. Review the detected proxy hosts, redirections, and parser warnings.
+3. To change the import, edit the source file and upload it again. The preview
+   does not provide inline editing or per-host selection.
+4. Confirm the import. The server reparses the original file and imports the
+   detected hosts.
 
-<!-- TODO: Screenshot — Import page with parsed Nginx config preview showing three server blocks -->
+The preview does not write to the database or Caddy. Confirmation creates hosts
+using their normal enabled defaults and can immediately change routing. Import
+only reviewed configurations; use an isolated instance to test a migration.
 
-## What is parsed
+## Scope
 
-| Nginx directive | PosternProxy field |
-|---|---|
-| `server_name` | Domain names |
-| `proxy_pass` | Forward scheme, host, and port |
-| `listen 443 ssl` | SSL forced = true |
-| `ssl_certificate` / `ssl_certificate_key` | Custom certificate (uploaded separately) |
-| `proxy_set_header Upgrade` | WebSocket support = true |
+The parser handles common `server_name`, `proxy_pass`, SSL-listener, and
+`return` redirect patterns. It is a best-effort converter, not an Nginx runtime
+or a complete configuration translator. Custom certificate and key files must be
+uploaded separately; Nginx filesystem paths are not transferred.
 
-## What is not imported
-
-The following Nginx directives have no equivalent in PosternProxy and are silently ignored:
-
-- `location` blocks (basic ones are previewed but multi-level `location` nesting is not supported)
-- `proxy_cache` directives
-- `lua_*` directives
-- `geo {}` and `map {}` blocks
-- Custom `upstream {}` groups (the primary upstream address is extracted, but load balancing config is not)
-
-## Preview and dry-run
-
-The import is always shown as a preview before any data is written. You can:
-
-- Deselect individual server blocks
-- Edit the detected upstream address before importing
-- See validation warnings (e.g. a `proxy_pass` with a hostname that cannot be resolved)
-
-No changes are made to Caddy or the database until you click **Import Selected**.
+Locations, upstream groups, variables, cache directives, scripting, and complex
+nesting require manual review. Parsed location information is not copied into
+created proxy hosts by the current import service. Parser warnings do not prove
+DNS resolution, upstream reachability, or successful Caddy application.
 
 ## After import
 
-Imported hosts are created as **disabled** by default. Review each one in the Proxy Hosts list and enable when ready. This prevents accidentally routing traffic before you have verified the configuration.
-
-## Notes
-
-- The parser handles Nginx configuration syntax but does not execute Nginx's variable expansion (`$host`, `$scheme`, etc.). Literal values are imported; variable references are left as-is and flagged as warnings.
-- Comments are preserved in the preview for context but are not stored in PosternProxy.
-- If you have a large number of server blocks, consider splitting the config into smaller files and importing in batches.
+Review the created hosts, SSL choices, server assignments, and any errors in the
+result. Import counts hosts saved to the database even if configuration
+application fails. Check
+[Configuration application status]({{< relref "/multi-server/configuration-status" >}})
+and actual traffic before switching production DNS.

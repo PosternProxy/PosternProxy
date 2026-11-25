@@ -26,7 +26,8 @@ export interface Server {
   uptime_seconds: number
   active_routes: number
   last_status_at: string | null
-  deployment_type: 'systemd' | 'docker'
+  deployment_type: 'systemd' | 'docker' | 'manual'
+  enrollment?: { controller_url: string; agent_token: string; server_id: number }
   http2_enabled: boolean
 }
 
@@ -130,6 +131,9 @@ export interface ImportSummary {
 export type TLSProbeState = 'valid' | 'pending' | 'failed'
 
 export interface TLSProbeStatus {
+  resource_type: string
+  server_id: number
+  domains: { domain: string; status: TLSProbeState; detail?: string; expires_at?: string }[]
   host_id: number
   domain: string
   status: TLSProbeState
@@ -157,6 +161,8 @@ export interface ProxyHostLocation {
 }
 
 export interface RedirectionHost {
+  ssl_forced: boolean
+  certificate_id: number | null
   id: number
   server_id: number
   domain_names: string[]
@@ -186,6 +192,9 @@ export interface StreamHost {
 }
 
 export interface DeadHost {
+  http_only: boolean
+  certificate_id: number | null
+  access_list_id: number | null
   id: number
   server_id: number
   domain_names: string[]

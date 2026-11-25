@@ -100,24 +100,30 @@ func (s *APITokenService) Create(ctx context.Context, callerID int64, callerRole
 // CreateForServer generates an agent token tied to a specific server.
 // The raw token is returned for embedding in the agent config.
 func (s *APITokenService) CreateForServer(ctx context.Context, serverID int64, callerID *int64) (rawToken string, err error) {
-	// Revoke any existing agent tokens for this server.
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.db.ExecContext(ctx, `UPDATE api_tokens SET revoked_at=? WHERE server_id=? AND revoked_at IS NULL`, now, serverID)
-
 	raw, prefix, hash, err := generateAPIToken()
 	if err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
+		return "", fmt.Errorf("generate agent token: %w", err)
 	}
-
-	scopesJSON := `["agent"]`
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_tokens (name, token_prefix, token_hash, scopes, creator_role, server_id, created_by)
-		VALUES (?, ?, ?, ?, 'admin', ?, ?)`,
-		fmt.Sprintf("Agent token (server %d)", serverID),
-		prefix, hash, scopesJSON, serverID, callerID,
-	)
+	agentHash, err := security.BcryptHash(raw)
 	if err != nil {
-		return "", fmt.Errorf("insert agent token: %w", err)
+		return "", fmt.Errorf("hash agent token: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at=? WHERE server_id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339), serverID); err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO api_tokens (name,token_prefix,token_hash,scopes,creator_role,server_id,created_by) VALUES (?,?,?,'["agent"]','admin',?,?)`, fmt.Sprintf("Agent token (server %d)", serverID), prefix, hash, serverID, callerID); err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE servers SET agent_token_hash=? WHERE id=?`, agentHash, serverID); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
 	}
 	return raw, nil
 }
@@ -351,4 +357,8 @@ func scanToken(s rowScanner) (*models.APIToken, error) {
 		t.RevokedAt = &revokedAt.String
 	}
 	return &t, nil
+}
+
+func (s *APITokenService) Audit(ctx context.Context, actorID int64, action string, id *int64, ip string) {
+	NewAuditService(s.db).Log(ctx, &actorID, action, "api_token", id, nil, ip)
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/posternproxy/posternproxy/internal/certstore"
 	"sort"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ var tableColumns = map[string]map[string]bool{
 	"dead_hosts": strset(
 		"id", "server_id", "domain_names", "certificate_id", "ssl_forced",
 		"access_list_id", "advanced_config", "enabled", "caddy_id",
-		"status_code", "custom_body", "created_at", "updated_at",
+		"status_code", "custom_body", "http_only", "created_at", "updated_at",
 	),
 	"settings": strset("key", "value"),
 }
@@ -94,6 +95,7 @@ func strset(cols ...string) map[string]bool {
 
 // BackupService handles database export and import.
 type BackupService struct {
+	store   *certstore.Store
 	db      *sql.DB
 	syncSvc *CaddySyncService
 }
@@ -124,55 +126,23 @@ func (s *BackupService) Export(ctx context.Context) (*BackupPayload, error) {
 // Import restores a BackupPayload into the database and re-syncs Caddy.
 // The users table is never touched. All other tables are cleared and replaced.
 func (s *BackupService) Import(ctx context.Context, payload *BackupPayload) (restored int, err error) {
+	if err := validateBackup(payload); err != nil {
+		return 0, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
+		return 0, err
 	}
 	defer tx.Rollback()
-
-	// Clear existing data in reverse FK order.
-	clearOrder := []string{
-		"settings",
-		"dead_hosts",
-		"stream_hosts",
-		"redirection_hosts",
-		"proxy_hosts",
-		"access_list_clients",
-		"access_lists",
-		"certificates",
+	restored, err = replaceBackupTables(ctx, tx, payload)
+	if err != nil {
+		return 0, err
 	}
-	for _, table := range clearOrder {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return 0, fmt.Errorf("clear %s: %w", table, err)
-		}
-	}
-
-	// Re-insert in FK-safe order.
-	for _, table := range tableOrder {
-		rows, ok := payload.Tables[table]
-		if !ok || len(rows) == 0 {
-			continue
-		}
-		for _, row := range rows {
-			if err := insertRow(ctx, tx, table, row); err != nil {
-				return 0, fmt.Errorf("insert into %s: %w", table, err)
-			}
-			restored++
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return 0, err
 	}
 
-	// Re-sync Caddy with the restored configuration.
-	if s.syncSvc != nil {
-		if err := s.syncSvc.SyncDirty(ctx); err != nil {
-			return restored, err
-		}
-	}
-
-	return restored, nil
+	return restored, s.applyRestored(ctx)
 }
 
 func (s *BackupService) ConfigurationStates(ctx context.Context) ([]ConfigState, error) {
@@ -275,4 +245,94 @@ func UnmarshalPayload(data []byte) (*BackupPayload, error) {
 		return nil, fmt.Errorf("missing version field — may not be a valid PosternProxy backup")
 	}
 	return &p, nil
+}
+
+func replaceBackupTables(ctx context.Context, tx *sql.Tx, payload *BackupPayload) (restored int, err error) {
+	// Clear existing data in reverse FK order.
+	clearOrder := []string{
+		"settings",
+		"dead_hosts",
+		"stream_hosts",
+		"redirection_hosts",
+		"proxy_hosts",
+		"access_list_clients",
+		"access_lists",
+		"certificates",
+	}
+	for _, table := range clearOrder {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			return 0, fmt.Errorf("clear %s: %w", table, err)
+		}
+	}
+
+	// Re-insert in FK-safe order.
+	for _, table := range tableOrder {
+		rows, ok := payload.Tables[table]
+		if !ok || len(rows) == 0 {
+			continue
+		}
+		for _, row := range rows {
+			if err := insertRow(ctx, tx, table, row); err != nil {
+				return 0, fmt.Errorf("insert into %s: %w", table, err)
+			}
+			restored++
+		}
+	}
+
+	return restored, nil
+}
+
+func validateBackup(payload *BackupPayload) error {
+	if payload == nil || payload.Version != backupVersion {
+		return fmt.Errorf("unsupported backup version")
+	}
+	for table, rows := range payload.Tables {
+		allowed, ok := tableColumns[table]
+		if !ok {
+			return fmt.Errorf("unsupported backup table %q", table)
+		}
+		seen := map[string]bool{}
+		for _, row := range rows {
+			if len(row) == 0 {
+				return fmt.Errorf("empty backup row")
+			}
+			identifier := row["id"]
+			if table == "settings" {
+				identifier = row["key"]
+			}
+			if identifier != nil {
+				key := fmt.Sprint(identifier)
+				if seen[key] {
+					return fmt.Errorf("duplicate backup identifier in %s", table)
+				}
+				seen[key] = true
+			}
+			for col := range row {
+				if !allowed[col] {
+					return fmt.Errorf("unsupported column %q in %s", col, table)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *BackupService) Audit(ctx context.Context, actorID *int64, action string, details map[string]any, ip string) {
+	NewAuditService(s.db).Log(ctx, actorID, action, "backup", nil, details, ip)
+}
+
+// RestoreApplyError reports application failure after the data transaction committed.
+type RestoreApplyError struct{ cause error }
+
+func (e *RestoreApplyError) Error() string {
+	return "Recovery data committed; configuration has not applied. Check server configuration status."
+}
+func (e *RestoreApplyError) Unwrap() error { return e.cause }
+func (s *BackupService) applyRestored(ctx context.Context) error {
+	if s.syncSvc != nil {
+		if err := s.syncSvc.SyncDirty(ctx); err != nil {
+			return &RestoreApplyError{cause: err}
+		}
+	}
+	return nil
 }

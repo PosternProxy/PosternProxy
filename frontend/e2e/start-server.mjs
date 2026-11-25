@@ -54,11 +54,15 @@ launch(binary, [], {
     POSTERNPROXY_DB_PATH: join(data, 'test.db'),
     POSTERNPROXY_CERT_DIR: join(data, 'certs'),
     POSTERNPROXY_LISTEN: '127.0.0.1:18181',
+    POSTERNPROXY_CONTROLLER_URL: 'http://127.0.0.1:18181',
     POSTERNPROXY_CADDY_API: 'http://127.0.0.1:1',
     POSTERNPROXY_JWT_SECRET: 'disposable-browser-test-secret-never-use-in-deployment',
     POSTERNPROXY_ADMIN_EMAIL: 'admin@e2e.test',
     POSTERNPROXY_ADMIN_PASSWORD: 'Disposable-browser-test-password',
     POSTERNPROXY_BEHIND_TLS_PROXY: 'false',
+    // The suite logs in per test; relax the per-IP login throttle (default 5/min)
+    // so sequential scenarios are not rate-limited. Production keeps the default.
+    POSTERNPROXY_LOGIN_RATE_LIMIT: '1000',
   },
 })
 

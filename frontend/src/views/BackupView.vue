@@ -2,6 +2,13 @@
 import { ref } from 'vue'
 import { exportBackup, importBackup } from '@/api/backup'
 
+const exportPassphrase = ref('')
+const exportConfirmation = ref('')
+const restorePassphrase = ref('')
+const createUnenrolled = ref(false)
+const mappingJSON = ref('{}')
+const exportError = ref('')
+const exporting = ref(false)
 const importFile = ref<File | null>(null)
 const importing = ref(false)
 const importError = ref('')
@@ -15,8 +22,13 @@ function handleFileChange(e: Event) {
   importSuccess.value = ''
 }
 
-function triggerExport() {
-  exportBackup()
+async function triggerExport() {
+ exportError.value = ''
+ if(exportPassphrase.value.length < 12 || exportPassphrase.value !== exportConfirmation.value){exportError.value='Use a passphrase of at least 12 characters and matching confirmation.';return}
+ exporting.value=true
+ try{await exportBackup(exportPassphrase.value);exportPassphrase.value='';exportConfirmation.value=''}
+ catch(e: unknown){exportError.value=e instanceof Error?e.message:'Export failed'}
+ finally{exporting.value=false}
 }
 
 function openConfirm() {
@@ -36,10 +48,11 @@ async function doImport() {
   importSuccess.value = ''
   showConfirm.value = false
   try {
-    const result = await importBackup(importFile.value)
+    const result = await importBackup(importFile.value, restorePassphrase.value, createUnenrolled.value, JSON.parse(mappingJSON.value) as Record<string, number>)
     importSuccess.value = result.synced
       ? `${result.restored} record(s) restored and configuration applied.`
       : `${result.restored} record(s) restored. Configuration is still waiting to apply; check server configuration status.`
+    restorePassphrase.value = ''
     importFile.value = null
     // Reset file input
     const input = document.getElementById('backup-file-input') as HTMLInputElement | null
@@ -59,7 +72,7 @@ async function doImport() {
     <div>
       <h2 class="text-xl font-semibold text-slate-800">Backup &amp; Restore</h2>
       <p class="mt-0.5 text-sm text-slate-500">
-        Export the full configuration or restore from a previous backup.
+        Export an encrypted recovery archive or restore configuration. Users, sessions and enrollment credentials remain on the destination.
       </p>
     </div>
 
@@ -81,14 +94,18 @@ async function doImport() {
         <div>
           <h3 class="text-sm font-semibold text-slate-800">Export Configuration</h3>
           <p class="mt-1 text-sm text-slate-500">
-            Download a JSON snapshot of all proxy hosts, redirection hosts, certificates, access
-            lists, and settings. Store this file somewhere safe.
+            Download a passphrase-encrypted archive containing hosts, access lists, uploaded certificate bytes and server descriptions. Keep the passphrase separately; it cannot be recovered.
           </p>
         </div>
       </div>
+      <p v-if="exportError" class="text-sm text-red-700">{{ exportError }}</p>
+      <div class="mb-4 space-y-2">
+        <input v-model="exportPassphrase" type="password" autocomplete="new-password" placeholder="Backup passphrase (12+ characters)" aria-label="Backup passphrase" class="w-full rounded border p-2" />
+        <input v-model="exportConfirmation" type="password" autocomplete="new-password" placeholder="Confirm passphrase" aria-label="Confirm backup passphrase" class="w-full rounded border p-2" />
+      </div>
       <button
         class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-        @click="triggerExport"
+        @click="triggerExport" :disabled="exporting"
       >
         Export Backup
       </button>
@@ -125,6 +142,14 @@ async function doImport() {
         {{ importSuccess }}
       </div>
 
+      <div class="mb-4 space-y-3">
+        <input v-model="restorePassphrase" type="password" autocomplete="off" placeholder="Archive passphrase" aria-label="Archive passphrase" class="w-full rounded border p-2" />
+        <label class="block text-sm">Server mapping (source ID to existing destination ID)
+          <textarea v-model="mappingJSON" class="mt-1 w-full rounded border p-2 font-mono" placeholder='{"2":52}'></textarea>
+        </label>
+        <label class="block text-sm"><input v-model="createUnenrolled" type="checkbox" /> Create unmapped remote servers without enrollment credentials. Enroll each agent afterward.</label>
+        <p class="text-xs text-slate-500">Legacy version 1 JSON restores only database configuration. It requires the original certificate files and matching server IDs.</p>
+      </div>
       <!-- File picker -->
       <div class="mb-4">
         <label class="mb-1 block text-sm font-medium text-slate-700">Backup File (.json)</label>

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -20,17 +19,29 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/posternproxy/posternproxy/internal/agent"
 	"github.com/posternproxy/posternproxy/internal/buildinfo"
+	"github.com/posternproxy/posternproxy/internal/certstore"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
 // Falls back to VCS info from the Go module build stamp, or "dev".
-var Version = buildinfo.Version()
+var Version = "dev"
 
 func main() {
+	if Version == "dev" {
+		Version = buildinfo.Version()
+	}
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		buildinfo.WriteVersion(os.Stdout, "posternproxy-agent", Version)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "install" {
+		runInstall(os.Args[2:])
+		return
+	}
 
 	controllerURL := mustEnv("POSTERNPROXY_CONTROLLER_URL") // wss://host:81
 	token := mustEnv("POSTERNPROXY_AGENT_TOKEN")
@@ -117,6 +128,7 @@ func (a *agentClient) connect() error {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(64 << 20)
 	log.Info().Msg("connected")
 
 	// Send initial status report.
@@ -159,17 +171,29 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 	case agent.KindConfigFullSync:
 		var p agent.ConfigFullSyncPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			if len(p.Certs) > 0 {
-				if err := writeCerts(p.Certs); err != nil {
-					log.Error().Err(err).Msg("failed to write cert files")
-					errMsg = err.Error()
-					break
-				}
+			material := make([]certstore.Material, 0, len(p.Certs))
+			for _, cert := range p.Certs {
+				material = append(material, certstore.Material{ID: cert.CertID, Pair: certstore.Pair{Certificate: cert.CertPEM, Key: cert.KeyPEM}})
 			}
-			if err := a.caddyLoad(p.Config); err != nil {
+			root := envOr("POSTERNPROXY_CERT_RUNTIME_DIR", "/run/posternproxy-agent-certs")
+			config, keep, err := certstore.StageConfig(p.Config, material, root)
+			if err != nil {
+				errMsg = "Certificate staging failed"
+				log.Error().Err(err).Msg("stage required certificates")
+				break
+			}
+			if err := a.caddyLoad(config); err != nil {
 				errMsg = err.Error()
 			} else {
-				success = true
+				if err := certstore.PruneRuntime(root, keep); err != nil {
+					errMsg = "Certificate retirement failed"
+					log.Error().Err(err).Msg("retire inactive certificates")
+				} else if err := certstore.PruneLegacy(envOr("POSTERNPROXY_CERT_DIR", "/var/lib/posternproxy-agent/certs")); err != nil {
+					errMsg = "Legacy certificate cleanup failed"
+					log.Error().Err(err).Msg("remove legacy certificate copies")
+				} else {
+					success = true
+				}
 			}
 		}
 
@@ -304,26 +328,6 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-// writeCerts writes custom certificate files to the agent's cert directory so
-// they are available on disk before the Caddy config that references them loads.
-func writeCerts(certs []agent.CertFile) error {
-	certDir := envOr("POSTERNPROXY_CERT_DIR", "/var/lib/posternproxy-agent/certs")
-	for _, c := range certs {
-		dir := filepath.Join(certDir, strconv.FormatInt(c.CertID, 10))
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return fmt.Errorf("create cert dir %s: %w", dir, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "cert.pem"), c.CertPEM, 0600); err != nil {
-			return fmt.Errorf("write cert %d: %w", c.CertID, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "key.pem"), c.KeyPEM, 0600); err != nil {
-			return fmt.Errorf("write key %d: %w", c.CertID, err)
-		}
-		log.Debug().Int64("cert_id", c.CertID).Str("dir", dir).Msg("cert files written")
-	}
-	return nil
-}
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)

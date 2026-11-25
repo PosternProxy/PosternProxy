@@ -125,6 +125,19 @@ func (h *Hub) IsOnline(serverID int64) bool {
 	return ok
 }
 
+func (h *Hub) Disconnect(serverID int64) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	ac := h.agents[serverID]
+	delete(h.agents, serverID)
+	h.mu.Unlock()
+	if ac != nil && ac.conn != nil {
+		ac.conn.Close()
+	}
+}
+
 // MarkOnlineForTest registers a placeholder AgentConn for the given server so
 // IsOnline returns true without requiring a real WebSocket. Tests only.
 func (h *Hub) MarkOnlineForTest(serverID int64) {

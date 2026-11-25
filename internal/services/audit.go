@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"github.com/posternproxy/posternproxy/internal/models"
 	"github.com/rs/zerolog/log"
@@ -49,7 +50,7 @@ func hostAuditSnapshot(entity any) (map[string]json.RawMessage, error) {
 	}
 	safe := map[string]json.RawMessage{}
 	// Route bodies, headers, and upstream configuration can carry credentials.
-	for _, key := range []string{"id", "server_id", "domain_names", "enabled", "certificate_id", "access_list_id", "incoming_port", "forward_port", "protocol", "status_code"} {
+	for _, key := range []string{"id", "server_id", "domain_names", "enabled", "certificate_id", "access_list_id", "incoming_port", "forward_port", "protocol", "status_code", "http_only", "ssl_forced"} {
 		if value, ok := fields[key]; ok {
 			safe[key] = value
 		}
@@ -65,11 +66,59 @@ func (s *AuditService) Log(ctx context.Context, userID *int64, action, resourceT
 		detailsJSON = []byte("{}")
 	}
 
-	_, err = s.db.ExecContext(ctx,
+	if _, err = s.db.ExecContext(ctx,
 		`INSERT INTO audit_log (user_id, action, resource_type, resource_id, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)`,
 		userID, action, resourceType, resourceID, string(detailsJSON), ipAddress,
-	)
-	return err
+	); err != nil {
+		// Audit writes are best-effort and most privileged-action call sites
+		// discard this error, so record the failure here. This keeps every
+		// dropped audit record observable in the logs regardless of the caller.
+		event := log.Error().Err(err).Str("action", action).Str("resource_type", resourceType)
+		if resourceID != nil {
+			event = event.Int64("resource_id", *resourceID)
+		}
+		event.Msg("failed to write audit record")
+		return err
+	}
+	return nil
+}
+
+// sensitiveSettingKey reports whether a settings key's value must be masked in
+// audit snapshots. The currently editable keys are non-secret, but this guards
+// any future secret-bearing key (API keys, passwords, tokens).
+func sensitiveSettingKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, marker := range []string{"secret", "password", "passwd", "token", "credential", "private"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactSettings(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	safe := make(map[string]string, len(values))
+	for k, v := range values {
+		if sensitiveSettingKey(k) {
+			safe[k] = "[redacted]"
+		} else {
+			safe[k] = v
+		}
+	}
+	return safe
+}
+
+// SettingsChange records a settings edit with a redacted before/after snapshot
+// and an explicit success outcome. Like the other helpers it is best-effort.
+func (s *AuditService) SettingsChange(ctx context.Context, actor *int64, success bool, before, after map[string]string, ip string) {
+	_ = s.Log(ctx, actor, "update", "settings", nil, map[string]any{
+		"success": success,
+		"before":  redactSettings(before),
+		"after":   redactSettings(after),
+	}, ip)
 }
 
 // List returns a paginated slice of audit log entries and the total count.

@@ -9,7 +9,7 @@ export interface CreateServerInput {
   ssh_user: string
   ssh_auth_method: 'password' | 'key'
   ssh_credentials: string
-  deployment_type: 'systemd' | 'docker'
+  deployment_type: 'systemd' | 'docker' | 'manual'
 }
 
 export type UpdateServerInput = Partial<CreateServerInput>
@@ -44,4 +44,8 @@ export function openProvisionLog(id: number): EventSource {
   // via a short-lived approach. For now use the standard URL — the provision-log
   // endpoint is admin-only and protected by the session cookie.
   return new EventSource(`/api/servers/${id}/provision-log`, { withCredentials: true })
+}
+
+export async function rotateAgentCredentials(id: number): Promise<{controller_url: string; agent_token: string; server_id: number}> {
+ const {data}=await client.post(`/servers/${id}/agent-credentials`); return data
 }

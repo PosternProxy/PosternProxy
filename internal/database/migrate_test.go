@@ -45,10 +45,17 @@ func TestBaselineUpgradePreservesData(t *testing.T) {
 		VALUES (1, '["baseline.test"]', 'http', '127.0.0.1', 8080)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`INSERT INTO dead_hosts(domain_names) VALUES('["old-park.test"]')`); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if err := Migrate(db); err != nil {
 			t.Fatalf("upgrade/repeated startup: %v", err)
 		}
+	}
+	var httpOnly int
+	if err := db.QueryRow(`SELECT http_only FROM dead_hosts WHERE domain_names='["old-park.test"]'`).Scan(&httpOnly); err != nil || httpOnly != 0 {
+		t.Fatalf("parked host migration changed existing HTTPS mode: %v", err)
 	}
 	var host string
 	if err := db.QueryRow(`SELECT forward_host FROM proxy_hosts WHERE domain_names = '["baseline.test"]'`).Scan(&host); err != nil {

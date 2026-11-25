@@ -7,6 +7,84 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Apply explicit per-server Caddy trusted-proxy policies to visitor ACLs, rate
+  limits and canonical upstream client headers, including location routes.
+- Bound proxy request headers, header-read time, idle keepalive and upstream TLS
+  handshakes while preserving uploads, SSE and WebSockets.
+- Refuse to replace an empty or unreadable persisted controller encryption secret.
+- Bound certificate multipart uploads and update frontend dependencies to clear
+  the advisories identified during beta qualification.
+- Keep SSH diagnostics separate from architecture, privilege and version probe
+  output so noninteractive shell warnings do not break native agent provisioning.
+
+### Fixed
+
+- UDP stream hosts now forward to their upstream over UDP. Previously the
+  generated Layer4 proxy dialed the upstream over TCP regardless of protocol,
+  silently breaking UDP forwarding; qualified with a live pinned-Caddy UDP test.
+- First-time controller installation prints the initial admin login after readiness,
+  using temporary private runtime configuration instead of service password logs.
+  Reinstalling preserves existing passwords.
+
+- Native installers normalize the embedded Caddy verification script to Unix
+  line endings, fixing Bash failures in Linux binaries built on Windows.
+- Custom certificate uploads validate PEM, key pairing, server usage, domains
+  and validity before storage, and save expiry metadata. Private source material
+  is encrypted; per-server synchronization excludes unrelated certificates.
+- Certificate activation stages immutable runtime pairs for Caddy's dedicated
+  read-only group and retains the last applied material if replacement fails.
+- Reviewed the documentation against the current UI, configuration, routes and
+  services. Corrected agent packaging/provisioning guidance, log and password
+  recovery commands, API CSRF examples, settings behavior, history retention,
+  forwarding and certificate/audit claims; documented remaining beta limitations.
+- Installation docs now show bundle extraction, the extracted `posternproxy`
+  filename, and `--assets-dir .`, with a separate path for individual release binaries.
+- Remote SSH installation uses verified prebuilt Linux artifacts and the native
+  agent installer, passes credentials in private files, preserves firewall rules,
+  and waits for authenticated acknowledgement of the current configuration.
+- Settings display actual runtime values and reject ineffective changes. Audit
+  access is admin-only, with additional redacted management events.
+- Stream listener conflicts are rejected before saving. Dead hosts persist
+  certificate and access-list selections; redirect/dead routes enforce IP lists.
+- Release version stamping now survives process initialization; both binaries expose a version command.
+- Caddy is updated to the patched 2.11.9 build and uses the pinned Go 1.26.11 toolchain across build paths.
+- Controller containers now include the agent executable for SSH provisioning.
+- New controller installations use a fail2ban filter matching the actual failed
+  login request logs, with structured JSON logging enabled in the service.
+
+### Added
+
+- Admin sign-in and sidebar use the PosternProxy logo. Default proxy error and
+  parked-domain pages include matching light/dark logos and automatically follow
+  the visitor's system theme without external image requests or JavaScript.
+
+- Parked domains support an explicit HTTP-only mode without HTTPS routes or
+  certificate distribution. Existing parked domains keep their HTTPS setting.
+- Proxy, redirect and parked host lists share expandable TLS checks, alias results,
+  expiry/check times and guidance to Caddy's actual ACME issuance logs. Resource
+  IDs cannot collide across host types, and remote checks are labeled unavailable.
+
+- `posternproxy-agent install --config-file` shares native service setup with the
+  controller installer. Manual server enrollment and credential rotation display
+  credentials once and disconnect replaced identities.
+- Passphrase-encrypted version 2 recovery archives include custom certificate
+  bytes and credential-free server descriptions, with explicit remote mapping or
+  unenrolled creation. Restore separates database commit from configuration apply.
+- Live custom TLS and cross-key clean recovery acceptance tests.
+- `posternproxy install` installs the controller, release-matched Caddy and agent,
+  hardened systemd services, fail2ban, and security updates. Assets are verified
+  before system changes; local assets support source builds and offline delivery.
+- Tagged-release packaging creates draft Linux amd64/arm64 releases with SHA-256
+  manifests. Source build scripts also write manifests for local installation.
+
+### Changed
+
+- Go builds require Go 1.26+, with a patched toolchain preference; SSH cryptography dependencies and the WebSocket masking implementation are updated to fix reachable vulnerability findings.
+- Controller installation no longer requires transferring shell scripts or a
+  Caddy build helper. The shell entry point delegates to the Go subcommand.
+  Existing configuration is preserved; UFW setup is opt-in, requires the actual
+  SSH port, and preserves existing rules. SSH configuration is left intact.
+
 ## [0.1.3-beta] 2026-11-15
 
 This release remains in beta. Upgrade the controller and agents together.

@@ -1,11 +1,11 @@
 # Stage 1: Build Caddy with L4 + rate-limit modules
-FROM golang:1.25-alpine AS caddy-builder
+FROM golang:1.26-alpine AS caddy-builder
 RUN apk add --no-cache git
 COPY internal/caddybuild/build.sh /build-caddy.sh
 RUN . /build-caddy.sh && build_caddy /usr/local/bin/caddy && verify_caddy /usr/local/bin/caddy
 
 # Stage 2: Build agent binary
-FROM golang:1.25-alpine AS agent-builder
+FROM golang:1.26-alpine AS agent-builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download

@@ -20,6 +20,9 @@ Each rule has four fields:
 
 Click **+ Add Rule** to insert a new row. Rows with an empty Name are ignored on save.
 
+Use valid HTTP header names and values. Invalid operations can be rejected when
+Caddy applies the generated configuration.
+
 <!-- TODO: Screenshot — Headers tab with three rules (Set X-Real-IP on request, Set X-Frame-Options on response, Delete Server on response) -->
 
 ## Operations
@@ -36,12 +39,12 @@ The Headers tab includes a **Presets** panel with six common rules you can add w
 
 | Preset | Rule |
 |---|---|
-| **X-Real-IP** | Set `X-Real-IP: {remote_host}` on request |
-| **X-Forwarded-Proto** | Set `X-Forwarded-Proto: {scheme}` on request |
-| **Remove Server header** | Delete `Server` from response |
-| **X-Frame-Options** | Set `X-Frame-Options: SAMEORIGIN` on response |
-| **X-Content-Type-Options** | Set `X-Content-Type-Options: nosniff` on response |
-| **Strict-Transport-Security** | Set `Strict-Transport-Security: max-age=31536000` on response |
+| **Hide Server header** | Delete `Server` from response |
+| **Hide X-Powered-By** | Delete `X-Powered-By` from response |
+| **CORS Allow-Origin \*** | Set `Access-Control-Allow-Origin: *` on response |
+| **X-Frame-Options DENY** | Set `X-Frame-Options: DENY` on response |
+| **Cache-Control no-store** | Set `Cache-Control: no-store` on response |
+| **X-Request-ID passthrough** | Set `X-Request-ID: {http.request.uuid}` on request |
 
 ## How it works
 
@@ -56,14 +59,15 @@ Caddy supports [placeholder variables](https://caddyserver.com/docs/conventions#
 
 | Placeholder | Resolves to |
 |---|---|
-| `{remote_host}` | Client IP address |
-| `{scheme}` | `http` or `https` |
-| `{host}` | Request host header |
-| `{method}` | HTTP method |
-| `{uri}` | Full request URI |
+| `{http.request.remote.host}` | Immediate client connection IP address |
+| `{http.request.scheme}` | `http` or `https` |
+| `{http.request.host}` | Request host |
+| `{http.request.method}` | HTTP method |
+| `{http.request.uri}` | Full request URI |
 
 ## Notes
 
-- Rules are applied in the order they appear. A `Delete` followed by a `Set` will result in the header being present with the new value.
+- Rules are grouped into Caddy set/add/delete operations. Avoid contradictory
+  operations on the same name; row order is not a general ordering guarantee.
 - Response header rules are applied after the upstream responds. They cannot prevent upstream from sending a header; they can only modify the copy that reaches the client.
 - Header names are case-insensitive per HTTP/1.1 spec; Caddy normalises them to canonical form.

@@ -28,10 +28,13 @@ func NewDeadHostService(db *sql.DB, caddyClient *caddy.Client, audit *AuditServi
 // CreateDeadHostInput carries all fields accepted when creating or updating a
 // DeadHost.
 type CreateDeadHostInput struct {
-	ServerID    int64           `json:"server_id"`
-	DomainNames json.RawMessage `json:"domain_names"`
-	StatusCode  int             `json:"status_code"`
-	CustomBody  string          `json:"custom_body"`
+	HTTPOnly      bool            `json:"http_only"`
+	CertificateID *int64          `json:"certificate_id"`
+	AccessListID  *int64          `json:"access_list_id"`
+	ServerID      int64           `json:"server_id"`
+	DomainNames   json.RawMessage `json:"domain_names"`
+	StatusCode    int             `json:"status_code"`
+	CustomBody    string          `json:"custom_body"`
 }
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -39,7 +42,7 @@ type CreateDeadHostInput struct {
 // List returns all dead hosts ordered by ID.
 func (s *DeadHostService) List(ctx context.Context) ([]models.DeadHost, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, server_id, domain_names, status_code, custom_body, enabled, caddy_id, created_at, updated_at
+		SELECT id, server_id, domain_names, status_code, custom_body, certificate_id, access_list_id, http_only, enabled, caddy_id, created_at, updated_at
 		FROM dead_hosts ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -51,7 +54,7 @@ func (s *DeadHostService) List(ctx context.Context) ([]models.DeadHost, error) {
 // ListByServer returns dead hosts for a specific server, ordered by ID.
 func (s *DeadHostService) ListByServer(ctx context.Context, serverID int64) ([]models.DeadHost, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, server_id, domain_names, status_code, custom_body, enabled, caddy_id, created_at, updated_at
+		SELECT id, server_id, domain_names, status_code, custom_body, certificate_id, access_list_id, http_only, enabled, caddy_id, created_at, updated_at
 		FROM dead_hosts WHERE server_id = ? ORDER BY id`, serverID)
 	if err != nil {
 		return nil, err
@@ -63,7 +66,7 @@ func (s *DeadHostService) ListByServer(ctx context.Context, serverID int64) ([]m
 // GetByID returns the dead host with the given ID, or nil if not found.
 func (s *DeadHostService) GetByID(ctx context.Context, id int64) (*models.DeadHost, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, server_id, domain_names, status_code, custom_body, enabled, caddy_id, created_at, updated_at
+		SELECT id, server_id, domain_names, status_code, custom_body, certificate_id, access_list_id, http_only, enabled, caddy_id, created_at, updated_at
 		FROM dead_hosts WHERE id = ?`, id)
 	h, err := scanDeadHostRow(row)
 	if err == sql.ErrNoRows {
@@ -74,6 +77,9 @@ func (s *DeadHostService) GetByID(ctx context.Context, id int64) (*models.DeadHo
 
 // Create inserts a new dead host and registers a 404 route in Caddy.
 func (s *DeadHostService) Create(ctx context.Context, callerID *int64, input CreateDeadHostInput, ip string) (*models.DeadHost, error) {
+	if input.StatusCode != 0 && input.StatusCode != 200 && input.StatusCode != 404 && input.StatusCode != 410 && input.StatusCode != 503 {
+		return nil, fmt.Errorf("status code must be 200, 404, 410 or 503")
+	}
 	if err := validateDomainNames(input.DomainNames); err != nil {
 		return nil, err
 	}
@@ -91,9 +97,9 @@ func (s *DeadHostService) Create(ctx context.Context, callerID *int64, input Cre
 	defer tx.Rollback()
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO dead_hosts (server_id, domain_names, status_code, custom_body)
-		VALUES (?,?,?,?)`,
-		input.ServerID, string(input.DomainNames), input.StatusCode, input.CustomBody,
+		INSERT INTO dead_hosts (server_id, domain_names, status_code, custom_body, certificate_id, access_list_id, http_only)
+		VALUES (?,?,?,?,?,?,?)`,
+		input.ServerID, string(input.DomainNames), input.StatusCode, input.CustomBody, input.CertificateID, input.AccessListID, boolToInt(input.HTTPOnly),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert dead host: %w", err)
@@ -124,6 +130,9 @@ func (s *DeadHostService) Update(ctx context.Context, callerID *int64, id int64,
 	if err != nil || existing == nil {
 		return nil, fmt.Errorf("dead host not found")
 	}
+	if input.StatusCode != 0 && input.StatusCode != 200 && input.StatusCode != 404 && input.StatusCode != 410 && input.StatusCode != 503 {
+		return nil, fmt.Errorf("status code must be 200, 404, 410 or 503")
+	}
 	if err := validateDomainNames(input.DomainNames); err != nil {
 		return nil, err
 	}
@@ -132,9 +141,9 @@ func (s *DeadHostService) Update(ctx context.Context, callerID *int64, id int64,
 		input.ServerID = existing.ServerID
 	}
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE dead_hosts SET server_id=?, domain_names=?, status_code=?, custom_body=?, updated_at=datetime('now')
+		UPDATE dead_hosts SET server_id=?, domain_names=?, status_code=?, custom_body=?, certificate_id=?,access_list_id=?, http_only=?, updated_at=datetime('now')
 		WHERE id=?`,
-		input.ServerID, string(input.DomainNames), input.StatusCode, input.CustomBody, id,
+		input.ServerID, string(input.DomainNames), input.StatusCode, input.CustomBody, input.CertificateID, input.AccessListID, boolToInt(input.HTTPOnly), id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update dead host: %w", err)
@@ -206,15 +215,16 @@ func scanDeadHosts(rows *sql.Rows) ([]models.DeadHost, error) {
 
 func scanDeadHostRow(row scanner) (*models.DeadHost, error) {
 	var h models.DeadHost
-	var enabled int
+	var enabled, httpOnly int
 	var domainNames string
 	err := row.Scan(
-		&h.ID, &h.ServerID, &domainNames, &h.StatusCode, &h.CustomBody, &enabled, &h.CaddyID, &h.CreatedAt, &h.UpdatedAt,
+		&h.ID, &h.ServerID, &domainNames, &h.StatusCode, &h.CustomBody, &h.CertificateID, &h.AccessListID, &httpOnly, &enabled, &h.CaddyID, &h.CreatedAt, &h.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	h.DomainNames = json.RawMessage(domainNames)
 	h.Enabled = enabled == 1
+	h.HTTPOnly = httpOnly == 1
 	return &h, nil
 }

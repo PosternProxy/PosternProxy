@@ -10,6 +10,10 @@ import (
 // BuildFullConfig constructs the complete Caddy JSON configuration from all
 // enabled entities. This is the DB → Caddy translation layer.
 func BuildFullConfig(in *BuildInput) (*Config, error) {
+	trusted, err := validateProxyRanges(in.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
 	httpRoutes := make([]*Route, 0)
 	l4Servers := make(map[string]*L4Server)
 
@@ -92,14 +96,14 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 		}
 		serveHTTPS := h.SSLForced || h.CertificateID != nil
 		if serveHTTPS {
-			route, err := BuildRedirectionHostRoute(h)
+			route, err := BuildRedirectionHostRoute(h, in.optionalAccessList(h.AccessListID))
 			if err != nil {
 				return nil, fmt.Errorf("redirection host %d: %w", h.ID, err)
 			}
 			httpRoutes = append(httpRoutes, route)
 		}
 		if !h.SSLForced {
-			route, err := BuildRedirectionHostRoute(h)
+			route, err := BuildRedirectionHostRoute(h, in.optionalAccessList(h.AccessListID))
 			if err != nil {
 				return nil, fmt.Errorf("redirection host %d (http): %w", h.ID, err)
 			}
@@ -118,17 +122,21 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 		if !h.Enabled {
 			continue
 		}
-		route, err := BuildDeadHostRoute(h, in.ControllerVersion)
-		if err != nil {
-			return nil, fmt.Errorf("dead host %d: %w", h.ID, err)
+		if !h.HTTPOnly {
+			route, err := BuildDeadHostRoute(h, in.ControllerVersion, in.optionalAccessList(h.AccessListID))
+			if err != nil {
+				return nil, fmt.Errorf("dead host %d: %w", h.ID, err)
+			}
+			httpRoutes = append(httpRoutes, route)
 		}
-		httpRoutes = append(httpRoutes, route)
 
-		httpRoute, err := BuildDeadHostRoute(h, in.ControllerVersion)
+		httpRoute, err := BuildDeadHostRoute(h, in.ControllerVersion, in.optionalAccessList(h.AccessListID))
 		if err != nil {
 			return nil, fmt.Errorf("dead host %d (http): %w", h.ID, err)
 		}
-		httpRoute.ID = "" // avoid duplicate @id across the :443 and :80 servers
+		if !h.HTTPOnly {
+			httpRoute.ID = ""
+		}
 		http80Routes = append(http80Routes, httpRoute)
 	}
 
@@ -218,6 +226,17 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 		},
 	}
 
+	for _, server := range httpApp.Servers {
+		server.ReadHeaderTimeout = "10s"
+		server.IdleTimeout = "2m"
+		server.MaxHeaderBytes = 1 << 20
+		if len(trusted) > 0 {
+			server.TrustedProxies = &TrustedProxySource{Source: "static", Ranges: trusted}
+			server.TrustedProxiesStrict = 1
+			server.ClientIPHeaders = []string{"X-Forwarded-For"}
+		}
+	}
+
 	// HTTP/2 is a server-wide setting; restrict the HTTPS listener to HTTP/1.1
 	// when disabled for this server.
 	if in.HTTP2Disabled {
@@ -255,6 +274,7 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 
 // BuildInput holds all entities needed to generate the full Caddy config.
 type BuildInput struct {
+	TrustedProxies   []string
 	ProxyHosts       []models.ProxyHost
 	RedirectionHosts []models.RedirectionHost
 	StreamHosts      []models.StreamHost
@@ -298,4 +318,11 @@ func (b *BuildInput) accessListByID(id int64) *models.AccessList {
 		}
 	}
 	return nil
+}
+
+func (b *BuildInput) optionalAccessList(id *int64) *models.AccessList {
+	if id == nil {
+		return nil
+	}
+	return b.accessListByID(*id)
 }

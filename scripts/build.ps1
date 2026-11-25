@@ -4,7 +4,7 @@
     PosternProxy Build Script (PowerShell)
     Produces controller, agent, and a custom Caddy build (L4 + rate-limit
     plugins) for the selected target.
-    Requires: Go 1.25+, Node 20+ with npm
+    Requires: Go 1.26+, Node 20.19+ or 22.12+ with npm
 
 .PARAMETER GoOS
     Target operating system. Default: linux
@@ -31,10 +31,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot   = (Resolve-Path "$PSScriptRoot\..").Path
 $CaddyContract = Get-Content (Join-Path $ProjectRoot 'internal/caddybuild/build.sh') -Raw
 $CaddyPins = @{}
-foreach ($PinMatch in [regex]::Matches($CaddyContract, '(?m)^(CADDY_VERSION|CADDY_L4_VERSION|CADDY_RATELIMIT_VERSION|XCADDY_VERSION)=([^\r\n]+)')) {
+foreach ($PinMatch in [regex]::Matches($CaddyContract, '(?m)^(CADDY_VERSION|CADDY_L4_VERSION|CADDY_RATELIMIT_VERSION|XCADDY_VERSION|CADDY_GO_TOOLCHAIN|CADDY_SECURITY_REPLACEMENTS)=([^\r\n]+)')) {
     $CaddyPins[$PinMatch.Groups[1].Value] = $PinMatch.Groups[2].Value
 }
-if ($CaddyPins.Count -ne 4) { throw 'Invalid Caddy build contract' }
+if ($CaddyPins.Count -ne 6) { throw 'Invalid Caddy build contract' }
 $binPath       = Join-Path "$ProjectRoot" "bin"
 $FrontendDir   = Join-Path $ProjectRoot "frontend"
 $UIEmbedDir    = Join-Path $ProjectRoot "internal\ui\dist"
@@ -42,6 +42,13 @@ $BinarySuffix  = if ($GoOS -eq "windows") { ".exe" } else { "" }
 $ControllerBin = Join-Path $binPath   "posternproxy$BinarySuffix"
 $AgentBin      = Join-Path $binPath   "posternproxy-agent$BinarySuffix"
 $CaddyBin      = Join-Path $binPath   "caddy$BinarySuffix"
+$Version = $env:POSTERNPROXY_BUILD_VERSION
+if (-not $Version) {
+    try {
+        $Version = (git -C $ProjectRoot describe --tags --always --dirty 2>$null)
+        if ($LASTEXITCODE -ne 0 -or -not $Version) { $Version = "dev" }
+    } catch { $Version = "dev" }
+}
 
 ###############################################################################
 # HELPERS
@@ -90,12 +97,6 @@ Copy-Item -Recurse "dist" $UIEmbedDir
 ###############################################################################
 Set-Location $ProjectRoot
 
-$Version = "dev"
-try {
-    $Version = (git describe --tags --always --dirty 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $Version) { $Version = "dev" }
-} catch { $Version = "dev" }
-
 ###############################################################################
 # GO BUILD — CONTROLLER
 ###############################################################################
@@ -143,8 +144,8 @@ Info "Agent: $AgentBin ($($AgentSize)MB)"
 # CADDY BUILD — custom build with L4 + rate-limit plugins
 ###############################################################################
 # Building Caddy here (on the build host) keeps the Go toolchain off the
-# production server. install.sh installs this binary directly and only falls
-# back to compiling on-server if it is missing. xcaddy honours the GOOS/GOARCH
+# production server. The install subcommand uses the release artifact or local
+# --assets-dir instead of compiling on the server. xcaddy honours GOOS/GOARCH
 # /CGO_ENABLED env vars set above, so the output matches the selected target.
 Info "Building custom Caddy (GOOS=$GoOS GOARCH=$GoArch)..."
 
@@ -167,14 +168,26 @@ if ($xcaddyInstallFailed) { Fatal "xcaddy install failed." }
 # Use the pinned tool installed above.
 $XcaddyCmd = $XcaddyBin
 
+$PreviousGoToolchain = $env:GOTOOLCHAIN
+$env:GOTOOLCHAIN = $CaddyPins.CADDY_GO_TOOLCHAIN
+$CaddySecurityArgs = @(foreach ($Replacement in ($CaddyPins.CADDY_SECURITY_REPLACEMENTS.Trim("'") -split ' ')) { '--replace'; $Replacement })
 & $XcaddyCmd build $CaddyPins.CADDY_VERSION `
     --with "github.com/mholt/caddy-l4@$($CaddyPins.CADDY_L4_VERSION)" `
     --with "github.com/mholt/caddy-ratelimit@$($CaddyPins.CADDY_RATELIMIT_VERSION)" `
-    --output $CaddyBin
-if ($LASTEXITCODE -ne 0) { Fatal "Caddy build failed." }
+    --output $CaddyBin @CaddySecurityArgs
+$CaddyBuildFailed = $LASTEXITCODE -ne 0
+$env:GOTOOLCHAIN = $PreviousGoToolchain
+if ($CaddyBuildFailed) { Fatal "Caddy build failed." }
 
 $CaddySize = [math]::Round((Get-Item $CaddyBin).Length / 1MB, 1)
 Info "Caddy: $CaddyBin ($($CaddySize)MB)"
+
+Info "Writing offline installation checksums..."
+$ChecksumLines = foreach ($BuiltBinary in @($ControllerBin, $AgentBin, $CaddyBin)) {
+    $BinaryHash = (Get-FileHash -LiteralPath $BuiltBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$BinaryHash  $(Split-Path -Leaf $BuiltBinary)"
+}
+$ChecksumLines | Set-Content -LiteralPath (Join-Path $binPath 'checksums.txt') -Encoding utf8NoBOM
 
 ###############################################################################
 # DONE
@@ -194,5 +207,5 @@ Write-Host "  Caddy      : $CaddyBin"
 Write-Host "  Target     : $GoOS/$GoArch"
 Write-Host "  Version    : $Version"
 Write-Host ""
-Write-Host "  Deploy with: bash scripts/install.sh" -ForegroundColor DarkGray
+Write-Host "  Deploy with: sudo ./posternproxy install --assets-dir ." -ForegroundColor DarkGray
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan

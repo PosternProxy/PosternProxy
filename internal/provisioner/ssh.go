@@ -78,8 +78,18 @@ func (c *sshClient) run(cmd string, out io.Writer) error {
 	return sess.Run(cmd)
 }
 
+// output keeps remote diagnostics separate from machine-readable stdout.
+func (c *sshClient) output(cmd string) ([]byte, error) {
+	sess, err := c.client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+	defer sess.Close()
+	return sess.Output(cmd)
+}
+
 // upload copies the contents of src to remotePath on the server via SFTP.
-func (c *sshClient) upload(remotePath string, src io.Reader) error {
+func (c *sshClient) upload(remotePath string, src io.Reader) (err error) {
 	sftp, err := sftp.NewClient(c.client)
 	if err != nil {
 		return fmt.Errorf("sftp client: %w", err)
@@ -90,7 +100,14 @@ func (c *sshClient) upload(remotePath string, src io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("sftp create %s: %w", remotePath, err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close remote upload: %w", closeErr)
+		}
+	}()
+	if err := f.Chmod(0600); err != nil {
+		return fmt.Errorf("protect remote upload: %w", err)
+	}
 
 	if _, err := io.Copy(f, src); err != nil {
 		return fmt.Errorf("sftp write: %w", err)

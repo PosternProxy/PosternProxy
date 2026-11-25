@@ -55,11 +55,14 @@ Rollback leaves the host's current enabled or disabled state in place.
 
 ## Retention
 
-PosternProxy keeps the 100 most recent snapshots per proxy host. Older entries are pruned automatically when new snapshots are added.
+The history API returns the 100 most recent snapshots per proxy host. Older
+database records are not automatically pruned by the current service.
 
 ## Notes
 
 - Snapshot contents are encrypted at rest. The history list shows metadata,
   and the controller decrypts snapshots internally during rollback.
 - History is per-resource: proxy hosts have their own history, independent of redirection hosts, stream hosts, etc.
-- History entries are not deleted when a proxy host is deleted. If you recreate a proxy host with the same ID, old history will not be associated with it.
+- History entries can remain after a host is deleted. The UI rolls back existing
+  proxy hosts; it is not an undelete facility. Creation entries have no prior
+  state and cannot be rolled back.

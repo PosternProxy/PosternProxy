@@ -12,13 +12,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agent"
 	"github.com/posternproxy/posternproxy/internal/api"
 	"github.com/posternproxy/posternproxy/internal/caddy"
+	"github.com/posternproxy/posternproxy/internal/certstore"
 	"github.com/posternproxy/posternproxy/internal/config"
 	"github.com/posternproxy/posternproxy/internal/database"
 	"github.com/posternproxy/posternproxy/internal/models"
@@ -69,6 +72,10 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configure client identity: %w", err)
 	}
+	caddyProxies, err := caddy.ParseTrustedProxyPolicies(cfg.CaddyTrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("configure Caddy client identity: %w", err)
+	}
 	log.Info().Str("db", cfg.DBPath).Msg("opening database")
 	db, err := database.Open(cfg.DBPath)
 	if err != nil {
@@ -85,11 +92,15 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	// ── Services ──────────────────────────────────────────────────────────
 	auditSvc := services.NewAuditService(db)
 	settingsSvc := services.NewSettingsService(db)
+	settingsSvc.ConfigureRuntime(cfg.CaddyAPI, cfg.CertDir)
 	tokenSvc := services.NewAPITokenService(db)
 	joinTokenSvc := services.NewJoinTokenService(db)
 	userSvc := services.NewUserService(db, auditSvc)
 	accessListSvc := services.NewAccessListService(db, auditSvc)
-	certSvc := services.NewCertificateService(db, cfg.CertDir, auditSvc)
+	certSvc := services.NewCertificateService(db, cfg.CertDir, auditSvc, cfg.EncryptionKey)
+	if err := certSvc.ProtectExisting(ctx); err != nil {
+		log.Error().Err(err).Msg("certificate storage migration incomplete; repair missing files or replace affected certificates")
+	}
 	healthSvc := services.NewHealthService(caddyClient)
 	tlsProbeSvc := services.NewTLSProbeService(db, "127.0.0.1:443")
 	historySvc := services.NewConfigHistoryService(db, cfg.EncryptionKey)
@@ -124,6 +135,8 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	)
 
 	caddySyncSvc = services.NewCaddySyncService(db, caddyClient, hub, cfg.Version)
+	caddySyncSvc.ConfigureCertificates(certstore.Store{Root: cfg.CertDir, Key: cfg.EncryptionKey}, cfg.CertRuntimeDir)
+	caddySyncSvc.ConfigureTrustedProxies(caddyProxies)
 	accessListSvc = services.NewAccessListService(db, auditSvc, caddySyncSvc)
 
 	// Host services route remote-server mutations through the hub via
@@ -132,9 +145,16 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	redirectionHostSvc := services.NewRedirectionHostService(db, caddyClient, auditSvc, caddySyncSvc)
 	deadHostSvc := services.NewDeadHostService(db, caddyClient, auditSvc, caddySyncSvc)
 	streamHostSvc := services.NewStreamHostService(db, caddyClient, auditSvc, caddySyncSvc)
+	if _, port, err := net.SplitHostPort(cfg.ListenAddr); err == nil {
+		if port, err := strconv.Atoi(port); err == nil {
+			streamHostSvc.ConfigureManagementPort(port)
+		}
+	}
 
 	backupSvc := services.NewBackupService(db, caddySyncSvc)
+	backupSvc.ConfigureCertificates(certstore.Store{Root: cfg.CertDir, Key: cfg.EncryptionKey})
 	serverSvc = services.NewServerService(db, auditSvc, hub, tokenSvc, caddyClient, cfg.EncryptionKey, cfg.ControllerURL, cfg.AgentBinPath)
+	serverSvc.ConfigureArtifacts(cfg.CaddyBinPath, cfg.Version)
 	nginxImportSvc := services.NewNginxImportService(proxyHostSvc, redirectionHostSvc)
 
 	registerRollbackHandlers(historySvc, proxyHostSvc)
@@ -200,6 +220,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		FrontendFS:             ui.FS(),
 		Version:                cfg.Version,
 		SecureCookies:          cfg.BehindTLSProxy,
+		LoginRateLimit:         cfg.LoginRateLimit,
 	})
 
 	ready = true

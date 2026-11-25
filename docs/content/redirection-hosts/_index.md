@@ -13,7 +13,7 @@ Redirection hosts issue HTTP redirects from one domain (or path) to another. The
 
 ## Creating a redirection host
 
-1. Click **Redirection Hosts** in the sidebar
+1. Click **Redirections** in the sidebar
 2. Click **+ Add Redirection Host**
 3. Fill in the form:
 
@@ -35,7 +35,7 @@ Redirection hosts issue HTTP redirects from one domain (or path) to another. The
 | Code | Type | Description |
 |---|---|---|
 | **301** | Moved Permanently | Browser caches the redirect. Use for permanent domain changes. |
-| **302** | Found (Temporary) | Browser does not cache. Use for temporary redirects. |
+| **302** | Found (Temporary) | Temporary redirect; caching also depends on response headers. |
 | **307** | Temporary Redirect | Like 302, but preserves the HTTP method (POST stays POST). |
 | **308** | Permanent Redirect | Like 301, but preserves the HTTP method. |
 
@@ -57,9 +57,12 @@ When disabled, all requests to the source domain redirect to the bare destinatio
 
 If you want to redirect `https://old.example.com` (rather than just `http://`), you need a certificate for `old.example.com`. Either:
 
-- Let Caddy obtain one automatically (the domain must be publicly resolvable to this server)
+- Enable **Force HTTPS** without an assigned custom certificate to use Caddy's
+  automatic issuance (public DNS/challenge reachability is required)
 - Upload a custom certificate on the [Certificates]({{< relref "/certificates" >}}) page and select it
 
 ## Enable / disable
 
-Redirection hosts can be toggled without deleting them. Disabled hosts are removed from Caddy's routing table immediately.
+Redirection hosts can be toggled without deleting them. Removal takes effect
+after configuration application succeeds. Check the configuration notice for
+offline agents and failed applications.

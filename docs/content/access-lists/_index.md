@@ -51,17 +51,19 @@ reused across multiple proxy hosts.
 
 ## How it works in Caddy
 
-Access list IP rules translate to Caddy `remote_ip` matchers. Denied requests
+Access list IP rules translate to Caddy `client_ip` matchers. Denied requests
 receive a `403 Forbidden` response before reaching the upstream.
 
 ## Notes
 
-- IP matching uses the client's direct connection IP. If PosternProxy is behind
-  another proxy, configure that proxy to set `X-Forwarded-For` and ensure Caddy is
-  configured to trust it.
+- IP matching uses the verified visitor address. With no proxy trust policy,
+  this is the immediate connection peer. Behind a proxy, configure the explicit
+  per-server `POSTERNPROXY_CADDY_TRUSTED_PROXIES` policy described in
+  [Security Hardening]({{< relref "/administration/security-hardening" >}}).
+  Management `POSTERNPROXY_TRUSTED_PROXIES` remains separate.
 - Deleting an access list assigned to one or more proxy hosts will succeed — the
-  proxy hosts retain the association but Caddy no longer enforces the list until a
-  new one is assigned.
+  database clears the host association (`ON DELETE SET NULL`) and reconciliation
+  removes the restriction. Review affected hosts before deleting a list.
 
 ## Not yet available
 

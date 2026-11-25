@@ -47,6 +47,7 @@ type RouterConfig struct {
 	Version                string
 	SecureCookies          bool // Set Secure flag on cookies (true when behind TLS proxy)
 	SessionService         *services.SessionService
+	LoginRateLimit         int // Max POST /login attempts per minute per IP; <=0 uses the default
 }
 
 // NewRouter wires all handlers into a chi router, applies middleware, and mounts
@@ -98,7 +99,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	configHistoryHandler := handlers.NewConfigHistoryHandler(cfg.ConfigHistoryService)
 	nginxImportHandler := handlers.NewNginxImportHandler(cfg.NginxImportService)
 
-	loginLimiter := security.NewRateLimiter(5, time.Minute)
+	loginLimit := cfg.LoginRateLimit
+	if loginLimit <= 0 {
+		loginLimit = 5
+	}
+	loginLimiter := security.NewRateLimiter(loginLimit, time.Minute)
 
 	// agentLimiter throttles authentication attempts on the agent WebSocket
 	// endpoint to prevent brute-forcing the bcrypt-hashed agent tokens. Real
@@ -185,6 +190,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Post("/{id}/join-token", joinTokenHandler.Issue)
 				r.Delete("/{id}/join-token", joinTokenHandler.Revoke)
 				r.Post("/{id}/reset-join", serverHandler.ResetJoin)
+				r.Post("/{id}/agent-credentials", serverHandler.AgentCredentials)
 			})
 
 			// API tokens — any authenticated user can manage their own tokens;
@@ -195,7 +201,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Delete("/{id}", apiTokenHandler.Revoke)
 			})
 
-			r.Get("/audit-log", auditHandler.List)
+			r.With(auth.RequireAdmin).Get("/audit-log", auditHandler.List)
 			r.Get("/configuration", func(w http.ResponseWriter, r *http.Request) {
 				if cfg.CaddySyncService == nil {
 					handlers.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "configuration service unavailable"})
@@ -227,6 +233,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Route("/backup", func(r chi.Router) {
 				r.Use(auth.RequireAdmin)
 				r.Get("/export", backupHandler.Export)
+				r.Post("/export", backupHandler.ExportPortable)
+				r.Post("/restore", backupHandler.RestorePortable)
 				r.Post("/import", backupHandler.Import)
 			})
 
@@ -245,6 +253,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// WebSocket endpoint for agent connections — no CSRF/JWT, uses token auth.
 	// Rate-limited per source IP to prevent brute-forcing the bcrypt token.
 	r.With(agentLimiter.Middleware).Get("/ws/agent", serverHandler.AgentConnect)
+	r.With(agentLimiter.Middleware).Get("/agent/verify", serverHandler.VerifyAgent)
 
 	// Serve the embedded SPA for all non-API routes.
 	if cfg.FrontendFS != nil {

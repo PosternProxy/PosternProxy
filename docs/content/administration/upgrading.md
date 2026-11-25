@@ -43,11 +43,11 @@ isolated copy. Prevent the copy from connecting to production agents or applying
 configuration to production Caddy. Verify accounts, relationships, custom TLS,
 configuration application, restart, and recovery before considering deployment.
 
-The current JSON export is a partial configuration export. It omits server records
-and custom certificate/key bytes and is not a portable disaster-recovery backup.
-Remote hosts can fail to restore into a fresh controller. Until portable recovery
-is implemented and qualified, do not use JSON export as the only recovery copy or
-as an assumed migration path for an unsupported schema.
+Version 2 [encrypted recovery archives]({{< relref "/backup-restore" >}})
+include custom certificate bytes and explicit remote-server mapping. They exclude
+accounts, credentials, runtime settings and Caddy's ACME state. Version 1 JSON
+remains a partial configuration export. Keep the offline copy for whole-system
+recovery and unsupported-schema rollback.
 
 ## Upgrade the controller and agents together
 

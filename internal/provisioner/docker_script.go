@@ -1,62 +1,78 @@
 package provisioner
 
-// dockerInstallScript is executed on the remote server for Docker-mode provisioning.
-// It installs Docker if absent, pulls the posternproxy-agent image, and runs it.
-//
-// The script expects these environment variables set before execution:
-//
-//	CONTROLLER_URL — wss://controller-host:81
-//	AGENT_TOKEN    — pre-shared authentication token
-//	SERVER_ID      — numeric server ID
-const dockerInstallScript = `#!/usr/bin/env bash
-set -euo pipefail
+import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"strings"
+)
 
-log() { echo "[posternproxy] $*"; }
-
-log "Starting PosternProxy Docker agent provisioning"
-
-### 1. Install Docker if not already present ###
-if ! command -v docker &>/dev/null; then
-    log "Installing Docker..."
-    curl -fsSL https://get.docker.com | sh
-    log "Docker installed."
-else
-    log "Docker already installed: $(docker --version)"
-fi
-
-### 2. Pull the agent image ###
-log "Pulling posternproxy-agent image..."
-docker pull ghcr.io/posternproxy/posternproxy-agent:latest
-
-### 3. Create data directory ###
-mkdir -p /opt/posternproxy-agent/data/certs
-
-### 4. Write env file ###
-cat > /opt/posternproxy-agent/.env <<EOF
-POSTERNPROXY_CONTROLLER_URL=${CONTROLLER_URL}
-POSTERNPROXY_AGENT_TOKEN=${AGENT_TOKEN}
-POSTERNPROXY_SERVER_ID=${SERVER_ID}
-EOF
-chmod 600 /opt/posternproxy-agent/.env
-log "Agent config written."
-
-### 5. Remove existing container if present ###
-docker rm -f posternproxy-agent 2>/dev/null || true
-
-### 6. Start agent container ###
-log "Starting posternproxy-agent container..."
-docker run -d \
-    --name posternproxy-agent \
-    --restart unless-stopped \
-    --env-file /opt/posternproxy-agent/.env \
-    -v /opt/posternproxy-agent/data:/data \
-    -p 80:80 \
-    -p 443:443 \
-    --cap-add NET_ADMIN \
-    --cap-add NET_RAW \
-    --cap-add NET_BIND_SERVICE \
-    --sysctl net.ipv4.ip_forward=1 \
-    ghcr.io/posternproxy/posternproxy-agent:latest
-
-log "Agent container started successfully."
+func installDockerAgent(input ProvisionInput, c *sshClient, log func(string)) error {
+	var uid bytes.Buffer
+	if err := c.run("id -u", &uid); err != nil {
+		return err
+	}
+	prefix := ""
+	if strings.TrimSpace(uid.String()) != "0" {
+		uid.Reset()
+		if err := c.run("sudo -n id -u", &uid); err != nil || strings.TrimSpace(uid.String()) != "0" {
+			return fmt.Errorf("Docker provisioning requires root or passwordless sudo")
+		}
+		prefix = "sudo -n "
+	}
+	// Docker installation is an operator prerequisite; never execute a downloaded shell script.
+	if err := c.run(prefix+"docker info >/dev/null", io.Discard); err != nil {
+		return fmt.Errorf("install and start Docker before provisioning")
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	dir := "/tmp/posternproxy-provision-" + hex.EncodeToString(nonce[:])
+	if err := c.run("mkdir -m 0700 -- "+shellQuote(dir), io.Discard); err != nil {
+		return err
+	}
+	defer func() {
+		if err := c.run("rm -rf -- "+shellQuote(dir), io.Discard); err != nil {
+			log("Private provisioning staging cleanup failed.")
+		}
+	}()
+	env := fmt.Sprintf("POSTERNPROXY_CONTROLLER_URL=%s\nPOSTERNPROXY_AGENT_TOKEN=%s\nPOSTERNPROXY_SERVER_ID=%d\n", input.ControllerURL, input.AgentToken, input.ServerID)
+	if err := c.upload(dir+"/agent.env", strings.NewReader(env)); err != nil {
+		return err
+	}
+	image := "ghcr.io/posternproxy/posternproxy-agent:" + input.Version
+	script := `set -eu
+ docker pull "$1"
+ if docker container inspect posternproxy-agent-previous >/dev/null 2>&1; then
+   echo 'Remove or rename posternproxy-agent-previous before retrying provisioning' >&2; exit 1
+ fi
+ data_source=posternproxy-agent-data
+ had_old=0
+ if docker container inspect posternproxy-agent >/dev/null 2>&1; then
+   previous_data="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' posternproxy-agent)"
+   if [ -n "$previous_data" ]; then data_source="$previous_data"; fi
+   docker stop posternproxy-agent >/dev/null
+   docker rename posternproxy-agent posternproxy-agent-previous
+   had_old=1
+ fi
+ if ! docker run -d --name posternproxy-agent --restart unless-stopped --env-file "$2" -v "$data_source:/data" -p 80:80 -p 443:443 -p 443:443/udp --cap-drop ALL --cap-add NET_BIND_SERVICE "$1"; then
+   docker rm -f posternproxy-agent >/dev/null 2>&1 || true
+   if [ "$had_old" = 1 ]; then docker rename posternproxy-agent-previous posternproxy-agent; docker start posternproxy-agent >/dev/null; fi
+   exit 1
+ fi
+ echo 'Container started. Previous container, if any, is retained for operator rollback.'
 `
+	if err := c.upload(dir+"/install.sh", strings.NewReader(script)); err != nil {
+		return err
+	}
+	writer := &lineWriter{onLine: log}
+	err := c.run(prefix+"bash "+shellQuote(dir+"/install.sh")+" "+shellQuote(image)+" "+shellQuote(dir+"/agent.env"), writer)
+	writer.flush()
+	if err != nil {
+		return fmt.Errorf("Docker installation failed: %w", err)
+	}
+	return nil
+}

@@ -3,6 +3,9 @@ import type { DeadHost } from '@/types'
 import { createResourceClient } from './resourceClient'
 
 export interface CreateDeadHostInput {
+  http_only?: boolean
+  certificate_id?: number | null
+  access_list_id?: number | null
   domain_names: string[]
   server_id?: number
   status_code?: 200 | 404 | 410 | 503

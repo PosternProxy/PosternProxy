@@ -22,13 +22,24 @@ type HTTPApp struct {
 
 // HTTPServer is a single HTTP server.
 type HTTPServer struct {
-	Listen         []string      `json:"listen"`
-	Routes         []*Route      `json:"routes,omitempty"`
-	Errors         *ServerErrors `json:"errors,omitempty"`
-	AutomaticHTTPS *AutoHTTPS    `json:"automatic_https,omitempty"`
+	TrustedProxies       *TrustedProxySource `json:"trusted_proxies,omitempty"`
+	TrustedProxiesStrict int                 `json:"trusted_proxies_strict,omitempty"`
+	ClientIPHeaders      []string            `json:"client_ip_headers,omitempty"`
+	ReadHeaderTimeout    string              `json:"read_header_timeout,omitempty"`
+	IdleTimeout          string              `json:"idle_timeout,omitempty"`
+	MaxHeaderBytes       int                 `json:"max_header_bytes,omitempty"`
+	Listen               []string            `json:"listen"`
+	Routes               []*Route            `json:"routes,omitempty"`
+	Errors               *ServerErrors       `json:"errors,omitempty"`
+	AutomaticHTTPS       *AutoHTTPS          `json:"automatic_https,omitempty"`
 	// Protocols restricts the protocols the server offers, e.g. ["h1"] to disable
 	// HTTP/2 and HTTP/3. Omitted = Caddy default (h1, h2, h3).
 	Protocols []string `json:"protocols,omitempty"`
+}
+
+type TrustedProxySource struct {
+	Source string   `json:"source"`
+	Ranges []string `json:"ranges"`
 }
 
 // ServerErrors holds custom error-handling routes for an HTTP server.
@@ -91,6 +102,7 @@ type Matcher struct {
 	Path     []string         `json:"path,omitempty"`
 	Not      []Matcher        `json:"not,omitempty"`
 	RemoteIP *RemoteIPMatcher `json:"remote_ip,omitempty"`
+	ClientIP *RemoteIPMatcher `json:"client_ip,omitempty"`
 	// Expression is a CEL matcher (http.matchers.expression). In errors.routes it
 	// matches the error status code, e.g. "{http.error.status_code} == 502".
 	// Caddy has no "error" matcher module, so error pages must match this way.
@@ -201,7 +213,8 @@ type Transport struct {
 }
 
 type TLSOptions struct {
-	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify,omitempty"`
+	HandshakeTimeout   string `json:"handshake_timeout,omitempty"`
 }
 
 // HealthChecks configures active and/or passive health checking for a reverse_proxy handler.

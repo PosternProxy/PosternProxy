@@ -9,7 +9,7 @@ at the controller's root path — there is no standalone deployment.
 - **Vue 3** (Composition API, `<script setup>`)
 - **TypeScript** (strict)
 - **Vite** dev server / build
-- **Pinia** for state (auth, settings)
+- **Pinia** for auth and server-context state
 - **vue-router** for routing
 - **Tailwind CSS** for styling
 - **Axios** for the API client (`src/api/`)
@@ -24,7 +24,7 @@ src/
   components/   Shared components (DeleteConfirmDialog, ServerPicker, etc.)
   composables/  Reusable composition functions (useResourceList, etc.)
   router/       vue-router config
-  stores/       Pinia stores (auth, settings)
+  stores/       Pinia stores (auth, servers, server context)
   types/        Shared TS types mirroring backend models
   utils/        Shared helpers (errors, formatting)
   views/        Route-level views — one folder per major resource
@@ -33,18 +33,21 @@ src/
 ## Prerequisites
 
 - Node `^20.19.0 || >=22.12.0`
-- A running controller backend on `http://localhost:8080` (default `make dev-backend`)
+- A running controller backend on `http://localhost:81` (default `make dev-backend`)
+- For the HTTP development UI, set `POSTERNPROXY_BEHIND_TLS_PROXY=false` on the
+  backend and allow `http://localhost:3000` with `POSTERNPROXY_ALLOWED_ORIGINS`
 
 ## Development
 
 ```sh
 npm install
-npm run dev          # Vite dev server with HMR, proxies /api → :8080
+npm run dev          # Vite dev server with HMR, proxies /api and /ws → :81
 ```
 
-Vite serves on `http://localhost:5173`. The dev server proxies `/api/*`
+Vite serves on `http://localhost:3000`. The dev server proxies `/api/*`
 and `/ws/*` to the Go controller — start the controller first (or run
-`make dev` from the repo root to launch both in parallel).
+`make dev` from the repo root to print the two-terminal instructions).
+Set `POSTERNPROXY_DEV_API` when starting Vite to override the backend target.
 
 ## Build
 
@@ -54,16 +57,19 @@ npm run build-only   # production build without type-check
 npm run preview      # serve dist/ for local verification
 ```
 
-`dist/` is consumed by the controller's `go:embed` at compile time. After
-`npm run build`, running `go build ./cmd/posternproxy` ships the SPA inside
-the binary.
+The controller embeds `internal/ui/dist/`, not `frontend/dist/` directly. The
+production scripts copy the output into that directory before compiling Go.
+Use `bash scripts/build.sh` from the repository root, or `scripts/build.ps1` on
+Windows, to build the embedded UI, controller, agent, Caddy, and checksums
+together. A bare `go build` embeds whatever files are already in `internal/ui/dist/`.
 
 ## Lint and format
 
 ```sh
 npm run lint           # ESLint with --fix
+npm run lint:check     # ESLint without modifying files (CI)
 npm run format         # Prettier write
-npm run format:check   # Prettier check (CI)
+npm run format:check   # Optional Prettier check
 npm run type-check     # vue-tsc, no emit
 ```
 

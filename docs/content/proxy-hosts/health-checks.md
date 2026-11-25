@@ -13,7 +13,7 @@ Active checks probe each upstream on a schedule by sending an HTTP request and e
 
 | Setting | Default | Description |
 |---|---|---|
-| **Path** | `/` | URL path Caddy requests on each backend |
+| **Path** | `/health` | URL path Caddy requests; leave empty to disable active checks |
 | **Interval** | `30s` | How often to run the check |
 | **Timeout** | `5s` | Maximum time to wait for a response |
 | **Expected status** | `200` | HTTP status code that counts as healthy |
@@ -29,27 +29,33 @@ Passive checks observe real traffic and mark a backend as unhealthy when it prod
 | Setting | Default | Description |
 |---|---|---|
 | **Fail duration** | `30s` | How long a backend stays ejected after being marked unhealthy |
-| **Max fails** | `3` | Number of consecutive failures before ejection |
+| **Max fails** | `3` | Failure threshold within the passive fail-duration window |
 | **Unhealthy latency** | `0` (disabled) | Mark slow responses (≥ this duration) as failures |
 
-Passive checks require no additional configuration beyond setting the thresholds. They activate automatically once any proxy host has health checks enabled.
+Passive checks are emitted for each host with **Enable Health Checks** on and
+nonzero passive thresholds. Enabling checks on one host does not enable them for
+every other host.
 
 ## Dashboard widget
 
-The Dashboard shows a live upstream health table for all proxy hosts that have health checks enabled. It refreshes every 30 seconds and includes:
+The Dashboard shows Caddy's cached local upstream counters. It refreshes every
+30 seconds and includes:
 
-- Current status (healthy / unhealthy)
-- Total request count
-- Total failure count
+- Derived status (healthy / unhealthy / unknown)
+- Caddy's reported request and failure counters
 
 See [Dashboard]({{< relref "/dashboard" >}}) for details.
 
 ## How Caddy reports health
 
-Caddy tracks health state internally. PosternProxy reads it from the Caddy admin API at `GET /reverse_proxy/upstreams`. The data is available immediately — no polling interval to configure on PosternProxy's side.
+Caddy tracks health internally. PosternProxy polls the local
+`GET /reverse_proxy/upstreams` endpoint at startup and every 30 seconds. The UI
+reads that cache. Zero failures with zero requests is shown as **unknown**, not
+as a successful reachability probe.
 
 ## Notes
 
-- Health checks run per upstream, per proxy host. Two proxy hosts sharing the same backend IP will have independent health state.
+- The dashboard counters are keyed by upstream address, not by host or remote
+  server. Do not treat the widget as isolated per-host or remote health evidence.
 - Active and passive checks can be enabled simultaneously — passive checks provide faster failure detection while active checks provide recovery detection.
 - If all backends fail, Caddy returns a `502 Bad Gateway`. Configure a [custom error page]({{< relref "/proxy-hosts/custom-error-pages" >}}) for 502 to give users a friendlier message.

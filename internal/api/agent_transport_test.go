@@ -53,6 +53,24 @@ func TestAgentHeaderAuthentication(t *testing.T) {
 			if tc.token != "" {
 				h.Set("Authorization", "Bearer "+tc.token)
 			}
+			verifyURL := server.URL + "/agent/verify?server_id=" + strconv.FormatInt(id, 10) + tc.query
+			request, err := http.NewRequest(http.MethodGet, verifyURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header = h.Clone()
+			verification, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verification.Body.Close()
+			expectedStatus := http.StatusUnauthorized
+			if tc.want {
+				expectedStatus = http.StatusNoContent
+			}
+			if verification.StatusCode != expectedStatus {
+				t.Fatalf("agent identity preflight: status %d, want %d", verification.StatusCode, expectedStatus)
+			}
 			conn, resp, err := websocket.DefaultDialer.Dial(endpoint+tc.query, h)
 			if tc.want {
 				if err != nil {

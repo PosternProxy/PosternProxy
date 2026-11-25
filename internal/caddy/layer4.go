@@ -9,9 +9,13 @@ import (
 // BuildStreamServer generates a Caddy Layer4 server entry for a stream host.
 func BuildStreamServer(h *models.StreamHost) *L4Server {
 	var listen []string
+	// dialNetwork prefixes the upstream address so the L4 proxy forwards on the
+	// right transport. Without it a UDP listener would dial the upstream over TCP.
+	dialNetwork := ""
 	switch h.Protocol {
 	case "udp":
 		listen = []string{fmt.Sprintf("udp/:%d", h.IncomingPort)}
+		dialNetwork = "udp/"
 	case "tcp+udp":
 		listen = []string{
 			fmt.Sprintf(":%d", h.IncomingPort),
@@ -22,7 +26,7 @@ func BuildStreamServer(h *models.StreamHost) *L4Server {
 	}
 
 	upstream := L4Upstream{
-		Dial: []string{fmt.Sprintf("%s:%d", h.ForwardHost, h.ForwardPort)},
+		Dial: []string{fmt.Sprintf("%s%s:%d", dialNetwork, h.ForwardHost, h.ForwardPort)},
 	}
 
 	proxyHandler := L4Handler{

@@ -72,7 +72,7 @@ func TestReadTokenCannotMutateThroughRouter(t *testing.T) {
 		{"POST", "/api/proxy-hosts/1/disable"}, {"POST", "/api/redirection-hosts"}, {"POST", "/api/dead-hosts"}, {"POST", "/api/stream-hosts"},
 		{"PUT", "/api/access-lists/1"}, {"POST", "/api/certificates/upload"}, {"POST", "/api/servers/2/provision"}, {"POST", "/api/servers/2/resync"},
 		{"POST", "/api/servers/2/join-token"}, {"POST", "/api/servers/2/reset-join"}, {"POST", "/api/config-history/1/rollback"},
-		{"POST", "/api/backup/import"}, {"POST", "/api/import/nginx/preview"}, {"POST", "/api/import/nginx/confirm"}, {"PUT", "/api/settings"}, {"POST", "/api/users"},
+		{"POST", "/api/backup/import"}, {"POST", "/api/backup/export"}, {"POST", "/api/backup/restore"}, {"POST", "/api/servers/2/agent-credentials"}, {"POST", "/api/import/nginx/preview"}, {"POST", "/api/import/nginx/confirm"}, {"PUT", "/api/settings"}, {"POST", "/api/users"},
 	}
 	for _, tc := range paths {
 		t.Run(tc.method+tc.path, func(t *testing.T) {
@@ -182,5 +182,27 @@ func TestSessionRotationAndLogoutThroughRouter(t *testing.T) {
 	}
 	if res := f.request("GET", "/api/auth/me", legacy.AccessToken, ""); res.Code != 401 {
 		t.Fatal("sessionless JWT accepted")
+	}
+}
+
+func TestAuditLogRejectsNonAdmin(t *testing.T) {
+	f := newAuthFixture(t)
+	viewer, err := f.users.Create(context.Background(), nil, models.CreateUserInput{Email: "viewer@test.invalid", Name: "Viewer", Password: "test-password", Role: "viewer"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := f.sessions.Issue(context.Background(), viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := f.request("GET", "/api/audit-log", pair.AccessToken, ""); response.Code != 403 {
+		t.Fatalf("viewer audit access: %d", response.Code)
+	}
+	admin, err := f.sessions.Issue(context.Background(), f.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := f.request("GET", "/api/audit-log", admin.AccessToken, ""); response.Code != 200 {
+		t.Fatalf("admin audit access: %d %s", response.Code, response.Body)
 	}
 }

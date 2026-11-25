@@ -1,8 +1,10 @@
 # Shared by repository builds, installers, containers, and embedded provisioning.
-CADDY_VERSION=v2.11.4
+CADDY_VERSION=v2.11.9
 CADDY_L4_VERSION=v0.1.1
 CADDY_RATELIMIT_VERSION=v0.1.0
 XCADDY_VERSION=v0.4.6
+CADDY_GO_TOOLCHAIN=go1.26.11
+CADDY_SECURITY_REPLACEMENTS='golang.org/x/crypto=golang.org/x/crypto@v0.59.0 golang.org/x/net=golang.org/x/net@v0.63.0 github.com/klauspost/compress=github.com/klauspost/compress@v1.20.5 go.opentelemetry.io/otel=go.opentelemetry.io/otel@v1.47.0 go.opentelemetry.io/otel/sdk=go.opentelemetry.io/otel/sdk@v1.47.0 go.opentelemetry.io/otel/sdk/log=go.opentelemetry.io/otel/sdk/log@v1.47.0 go.opentelemetry.io/otel/trace=go.opentelemetry.io/otel/trace@v1.47.0'
 
 verify_caddy() {
     caddy_binary="$1"
@@ -23,10 +25,14 @@ verify_caddy() {
 build_caddy() {
     caddy_output="$1"
     # xcaddy must execute on the build host even when the output is cross-compiled.
-    env GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)" \
+    env GOTOOLCHAIN="$CADDY_GO_TOOLCHAIN" GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)" \
         go install "github.com/caddyserver/xcaddy/cmd/xcaddy@$XCADDY_VERSION" || return 1
-    "$(go env GOPATH)/bin/xcaddy" build "$CADDY_VERSION" \
+    set -- build "$CADDY_VERSION" \
         --with "github.com/mholt/caddy-l4@$CADDY_L4_VERSION" \
         --with "github.com/mholt/caddy-ratelimit@$CADDY_RATELIMIT_VERSION" \
         --output "$caddy_output"
+    for caddy_security_replacement in $CADDY_SECURITY_REPLACEMENTS; do
+        set -- "$@" --replace "$caddy_security_replacement"
+    done
+    GOTOOLCHAIN="$CADDY_GO_TOOLCHAIN" "$(go env GOPATH)/bin/xcaddy" "$@"
 }

@@ -1,0 +1,76 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test Go packages
+        run: go test ./...
+      - name: Build release binaries
+        env:
+          GOARCH: ${{ matrix.arch }}
+          POSTERNPROXY_BUILD_VERSION: ${{ github.ref_name }}
+        run: bash scripts/build.sh
+      - name: Type-check frontend
+        working-directory: frontend
+        run: npm run type-check
+      - name: Name platform assets
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir release
+          for binary in posternproxy posternproxy-agent caddy; do
+            cp "$binary" "release/$binary-linux-$TARGET_ARCH"
+          done
+          mkdir bundle
+          cp posternproxy posternproxy-agent caddy bundle/
+          (cd bundle && sha256sum posternproxy posternproxy-agent caddy > checksums.txt)
+          tar -C bundle -czf "release/posternproxy-linux-$TARGET_ARCH.tar.gz" posternproxy posternproxy-agent caddy checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: release/*
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: release
+      - name: Write checksums
+        working-directory: release
+        run: sha256sum posternproxy-* caddy-* > checksums.txt
+      - name: Create draft release for owner review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" release/* --verify-tag --draft --title "$RELEASE_TAG" --generate-notes

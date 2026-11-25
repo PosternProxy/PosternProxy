@@ -16,7 +16,7 @@ for a fix to be developed and distributed before publishing details.
 
 ## Supported Versions
 
-PosternProxy is currently preparing its first Beta release. Security fixes are
+PosternProxy is in beta. Security fixes are
 provided for the latest Beta release and the current `master` branch only.
 
 | Version | Supported |
@@ -31,9 +31,9 @@ provided for the latest Beta release and the current `master` branch only.
   protection, bcrypt password hashes, and tighter rate limiting on login and
   agent authentication endpoints.
 - Authenticated management API routes have a 120-request/minute per-IP limit;
-  login and agent authentication have stricter limits. Forwarding-header trust
-  is still a beta security blocker, so restrict management access at the network
-  or reverse-proxy layer rather than relying on these limits alone.
+  login and agent authentication have stricter limits. Management forwarding
+  headers are accepted only from configured trusted proxy CIDRs; keep that list
+  restricted and use network/reverse-proxy access controls as appropriate.
 - Stored SSH credentials are encrypted with AES-256-GCM using a key derived
   from the configured JWT secret. Keep that secret stable, private, and backed
   up; changing it prevents existing encrypted credentials from being read.
@@ -41,9 +41,12 @@ provided for the latest Beta release and the current `master` branch only.
   Caddy admin API from network access and bind it to a trusted local interface.
 - PosternProxy does not include a WAF. Internet-facing deployments should use a
   suitable upstream WAF or filtering layer when their threat model requires it.
-- The install scripts configure systemd sandboxing, firewall rules, fail2ban,
-  and unattended security updates. Review those defaults for your environment.
+- `posternproxy install` configures systemd sandboxing, fail2ban, and unattended
+  security updates. Firewall setup is opt-in and preserves existing UFW rules;
+  SSH configuration is unchanged. Downloaded runtime assets are checked against
+  the matching release's SHA-256 manifest and the embedded Caddy build contract.
 
 See [Security Hardening](docs/content/administration/security-hardening.md) for
 deployment guidance and verification commands. Some planned hardening work is
-tracked in [the Beta release readiness plan](plans/beta-release-readiness.md).
+described in [Beta limitations](docs/content/administration/beta-limitations.md)
+and tracked in `.agentplans/beta-exit-development-index.md`.

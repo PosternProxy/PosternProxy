@@ -75,6 +75,7 @@ func TestPinnedCaddyTraffic(t *testing.T) {
 			ForwardScheme: "http", ForwardHost: u.Hostname(), ForwardPort: upstreamPort,
 			RateLimitEnabled: true, RateLimitRequests: 2, RateLimitWindow: "1m",
 		}},
+		DeadHosts:   []models.DeadHost{{ID: 3, Enabled: true, HTTPOnly: true, DomainNames: json.RawMessage(`["parked-http.test"]`), StatusCode: 200, CustomBody: "parked-http"}},
 		StreamHosts: []models.StreamHost{{ID: 2, Enabled: true, Protocol: "tcp", IncomingPort: streamPort, ForwardHost: u.Hostname(), ForwardPort: upstreamPort}},
 	})
 	if err != nil {
@@ -175,6 +176,20 @@ func TestPinnedCaddyTraffic(t *testing.T) {
 		if want == 200 && string(body) != "pinned-caddy-upstream" {
 			t.Fatalf("unexpected upstream body: %q", body)
 		}
+	}
+	parkedRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkedRequest.Host = "parked-http.test"
+	parkedResponse, err := client.Do(parkedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkedBody, err := io.ReadAll(parkedResponse.Body)
+	parkedResponse.Body.Close()
+	if err != nil || parkedResponse.StatusCode != 200 || string(parkedBody) != "parked-http" {
+		t.Fatalf("HTTP-only parked traffic failed: %d %q %v", parkedResponse.StatusCode, parkedBody, err)
 	}
 	resp, err := client.Get("http://127.0.0.1:" + strconv.Itoa(streamPort))
 	if err != nil {

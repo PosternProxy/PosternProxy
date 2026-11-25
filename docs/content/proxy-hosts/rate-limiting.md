@@ -22,7 +22,12 @@ Enable the **Rate Limit** toggle on the Security tab, then set:
 | **Requests** | Maximum number of requests allowed per window |
 | **Window** | Duration of the sliding window (e.g. `60s`, `1m`, `5m`) |
 
-The rate limit is keyed per client IP address. Shared NAT addresses will share the same bucket.
+The rate limit is keyed by the verified visitor IP. With no proxy trust policy,
+this is the immediate connection peer. For proxy/CDN traffic, configure the
+explicit per-server `POSTERNPROXY_CADDY_TRUSTED_PROXIES` policy in
+[Security Hardening]({{< relref "/administration/security-hardening" >}}).
+Shared NAT addresses still share a bucket. Management
+`POSTERNPROXY_TRUSTED_PROXIES` remains separate.
 
 <!-- TODO: Screenshot — Security tab with rate limit enabled (100 req / 1m) -->
 

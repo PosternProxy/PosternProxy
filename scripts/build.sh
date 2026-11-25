@@ -2,13 +2,14 @@
 # PosternProxy Build Script
 # Produces: ./posternproxy (controller), ./posternproxy-agent (agent),
 #           ./caddy (custom Caddy build with the L4 + rate-limit plugins)
-# Requires: Go 1.25+, Node 20+ with npm
+# Requires: Go 1.26+, Node 20.19+ or 22.12+ with npm
 set -euo pipefail
 
 ###############################################################################
 # CONFIGURATION
 ###############################################################################
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_VERSION="${POSTERNPROXY_BUILD_VERSION:-$(git -C "${PROJECT_ROOT}" describe --tags --always --dirty 2>/dev/null || echo dev)}"
 . "${PROJECT_ROOT}/internal/caddybuild/build.sh"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 OUT_DIR="${PROJECT_ROOT}"
@@ -66,7 +67,7 @@ GOOS="${GOOS}" \
 GOARCH="${GOARCH}" \
 go build \
     -trimpath \
-    -ldflags="-s -w -X main.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+    -ldflags="-s -w -X main.Version=${BUILD_VERSION}" \
     -o "${CONTROLLER_BIN}" \
     ./cmd/posternproxy
 
@@ -82,7 +83,7 @@ GOOS="${GOOS}" \
 GOARCH="${GOARCH}" \
 go build \
     -trimpath \
-    -ldflags="-s -w -X main.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+    -ldflags="-s -w -X main.Version=${BUILD_VERSION}" \
     -o "${AGENT_BIN}" \
     ./cmd/posternproxy-agent
 
@@ -92,8 +93,8 @@ info "Agent: ${AGENT_BIN} ($(du -sh "${AGENT_BIN}" | cut -f1))"
 # CADDY BUILD — custom build with L4 + rate-limit plugins
 ###############################################################################
 # Building Caddy here (on the build/CI host) keeps the Go toolchain off the
-# production server. install.sh installs this binary directly and only falls
-# back to compiling on-server if it is missing.
+# production server. The install subcommand downloads this release artifact or
+# installs it from --assets-dir.
 info "Building custom Caddy (GOOS=${GOOS} GOARCH=${GOARCH})..."
 
 CGO_ENABLED=0 \
@@ -102,6 +103,16 @@ GOARCH="${GOARCH}" \
 build_caddy "${CADDY_BIN}"
 
 info "Caddy: ${CADDY_BIN} ($(du -sh "${CADDY_BIN}" | cut -f1))"
+
+info "Writing offline installation checksums..."
+(
+    cd "${OUT_DIR}"
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$(basename "${CONTROLLER_BIN}")" "$(basename "${AGENT_BIN}")" "$(basename "${CADDY_BIN}")" > checksums.txt
+    else
+        shasum -a 256 "$(basename "${CONTROLLER_BIN}")" "$(basename "${AGENT_BIN}")" "$(basename "${CADDY_BIN}")" > checksums.txt
+    fi
+)
 
 ###############################################################################
 # DONE
@@ -114,5 +125,5 @@ echo "  Controller: ${CONTROLLER_BIN}"
 echo "  Agent:      ${AGENT_BIN}"
 echo "  Caddy:      ${CADDY_BIN}"
 echo ""
-echo "  Deploy with: sudo bash scripts/install.sh"
+echo "  Deploy with: sudo ./posternproxy install --assets-dir ."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

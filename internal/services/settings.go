@@ -23,7 +23,8 @@ var AllowedKeys = []SettingKey{
 
 // SettingsService manages key/value settings stored in SQLite.
 type SettingsService struct {
-	db *sql.DB
+	db      *sql.DB
+	runtime map[string]string
 }
 
 // NewSettingsService creates a SettingsService backed by db.
@@ -47,7 +48,18 @@ func (s *SettingsService) GetAll(ctx context.Context) (map[string]string, error)
 		}
 		result[k] = v
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for k, v := range s.runtime {
+		result[k] = v
+	}
+	for k := range result {
+		if !isAllowedKey(k) {
+			delete(result, k)
+		}
+	}
+	return result, nil
 }
 
 // Get returns a single setting by key. Returns ("", false, nil) if not found.
@@ -65,6 +77,12 @@ func (s *SettingsService) Get(ctx context.Context, key string) (string, bool, er
 
 // Set upserts a setting. Only allowed keys may be set via API.
 func (s *SettingsService) Set(ctx context.Context, key, value string) error {
+	if current, ok := s.runtime[key]; ok {
+		if value == current {
+			return nil
+		}
+		return fmt.Errorf("%s is configured through the environment; change the service configuration and restart (certificate storage requires migration)", key)
+	}
 	if !isAllowedKey(key) {
 		return fmt.Errorf("unknown setting key: %s", key)
 	}
@@ -78,7 +96,10 @@ func (s *SettingsService) Set(ctx context.Context, key, value string) error {
 // SetBulk upserts multiple settings at once. Rejects any disallowed key before
 // writing anything.
 func (s *SettingsService) SetBulk(ctx context.Context, updates map[string]string) error {
-	for k := range updates {
+	for k, v := range updates {
+		if current, ok := s.runtime[k]; ok && v != current {
+			return fmt.Errorf("%s is configured through the environment; change the service configuration and restart (certificate storage requires migration)", k)
+		}
 		if !isAllowedKey(k) {
 			return fmt.Errorf("unknown setting key: %s", k)
 		}
@@ -112,4 +133,14 @@ func isAllowedKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func (s *SettingsService) ConfigureRuntime(caddyAPI, certRoot string) {
+	s.runtime = map[string]string{SettingCaddyAPIURL: caddyAPI, SettingCertStoragePath: certRoot}
+}
+
+// AuditChange records a settings edit with a redacted before/after snapshot and
+// an explicit success outcome. actor may be nil when the caller is unknown.
+func (s *SettingsService) AuditChange(ctx context.Context, actor *int64, success bool, before, after map[string]string, ip string) {
+	NewAuditService(s.db).SettingsChange(ctx, actor, success, before, after, ip)
 }

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import BrandLogo from '@/components/BrandLogo.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -39,7 +40,8 @@ async function handleSubmit() {
   <div class="flex min-h-screen items-center justify-center bg-slate-900">
     <div class="w-full max-w-md rounded-xl bg-white p-8 shadow-2xl">
       <div class="mb-8 text-center">
-        <h1 class="text-2xl font-bold text-slate-900">PosternProxy</h1>
+        <BrandLogo class="mx-auto h-40 w-40" />
+        <h1 class="sr-only">PosternProxy</h1>
         <p class="mt-1 text-sm text-slate-500">Sign in to your account</p>
       </div>
 

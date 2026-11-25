@@ -3,6 +3,7 @@ import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import type { Server } from '@/types'
 import {
   listServers,
+ rotateAgentCredentials,
   createServer,
   updateServer,
   deleteServer,
@@ -36,6 +37,7 @@ const {
 })
 
 // Add wizard (3-step)
+const enrollmentJSON = ref('')
 const showWizard = ref(false)
 const wizardStep = ref<1 | 2 | 3>(1) // 1=credentials, 2=provisioning, 3=done
 const wizardSaving = ref(false)
@@ -116,7 +118,7 @@ function closeWizard() {
 }
 
 async function submitCredentials() {
-  if (!form.name || !form.hostname || !form.ssh_credentials) {
+  if (!form.name || !form.hostname || (form.deployment_type !== 'manual' && !form.ssh_credentials)) {
     wizardError.value = 'Name, hostname, and credentials are required.'
     return
   }
@@ -124,6 +126,13 @@ async function submitCredentials() {
   wizardError.value = ''
   try {
     const srv = await createServer({ ...form })
+    if (srv.enrollment) {
+      enrollmentJSON.value = JSON.stringify(srv.enrollment, null, 2)
+      delete srv.enrollment
+      servers.value.push(srv)
+      showWizard.value = false
+      return
+    }
     // srv.id is captured implicitly by closures below
     servers.value.push(srv)
     wizardStep.value = 2
@@ -171,7 +180,7 @@ async function streamProvisionLog(id: number) {
 
       for (const part of parts) {
         const trimmed = part.trim()
-        if (trimmed.startsWith('data:')) {
+        if (trimmed.startsWith('data:') && !['online', 'error', 'timeout'].includes(trimmed.slice(5).trim())) {
           provisionLines.value.push(trimmed.slice(5).trim())
           await nextTick()
           if (provisionLogEl.value) {
@@ -211,6 +220,11 @@ async function syncServerStatus(id: number) {
 }
 
 // ── Re-sync ───────────────────────────────────────────────────────────────────
+
+async function enroll(srv: Server) {
+  try { enrollmentJSON.value = JSON.stringify(await rotateAgentCredentials(srv.id), null, 2) }
+  catch (e: unknown) { resyncError.value = e instanceof Error ? e.message : 'Failed to rotate agent credentials' }
+}
 
 async function doResync(srv: Server) {
   resyncingId.value = srv.id
@@ -412,6 +426,7 @@ function formatUptime(seconds: number): string {
                   <span v-else>HTTP/2: {{ srv.http2_enabled ? 'On' : 'Off' }}</span>
                 </button>
 
+                <button v-if="!srv.is_local" class="rounded px-2 py-1 text-xs text-indigo-600" @click="enroll(srv)">Rotate enrollment</button>
                 <!-- Re-sync -->
                 <button
                   v-if="!srv.is_local"
@@ -434,7 +449,7 @@ function formatUptime(seconds: number): string {
 
                 <!-- Redeploy -->
                 <button
-                  v-if="!srv.is_local"
+                  v-if="!srv.is_local && srv.deployment_type !== 'manual'"
                   class="rounded px-2 py-1 text-xs font-medium text-amber-600 hover:bg-amber-50"
                   title="Re-run SSH provisioner"
                   @click="openRedeploy(srv)"
@@ -529,6 +544,12 @@ function formatUptime(seconds: number): string {
               {{ wizardError }}
             </div>
 
+            <label class="block text-sm">Installation
+              <select v-model="form.deployment_type" class="ml-2 rounded border p-2">
+                <option value="systemd">Automatic SSH install</option>
+                <option value="manual">Manual enrollment</option>
+              </select>
+            </label>
             <div class="grid grid-cols-2 gap-3">
               <div class="col-span-2">
                 <label class="mb-1 block text-sm font-medium text-slate-700">Server Name</label>
@@ -569,6 +590,7 @@ function formatUptime(seconds: number): string {
               </div>
             </div>
 
+            <template v-if="form.deployment_type !== 'manual'">
             <!-- Auth method toggle -->
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-700">Authentication</label>
@@ -615,16 +637,8 @@ function formatUptime(seconds: number): string {
               </p>
             </div>
 
-            <!-- Deployment is systemd (bare metal) only for now. Docker
-                 provisioning isn't ready yet, so the choice is hidden and every
-                 remote server is provisioned via systemd (the form default). -->
-            <div
-              class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-700"
-            >
-              <span class="font-medium">What happens next:</span> PosternProxy will SSH into the
-              server, install Caddy (with L4 module), deploy the agent binary, and configure
-              systemd + OS hardening. This takes 5–10 minutes depending on internet speed.
-            </div>
+            </template>
+            <p class="text-sm text-slate-600">Automatic installation uploads the matching agent and pinned Caddy, preserves the firewall, and waits for applied configuration. Manual enrollment displays a private configuration file once.</p>
           </div>
 
           <!-- Step 2: Provisioning log stream -->
@@ -716,7 +730,7 @@ function formatUptime(seconds: number): string {
                 :disabled="wizardSaving"
                 @click="submitCredentials"
               >
-                {{ wizardSaving ? 'Connecting…' : 'Start Provisioning →' }}
+                {{ wizardSaving ? 'Saving…' : form.deployment_type === 'manual' ? 'Create enrollment' : 'Start Provisioning →' }}
               </button>
             </template>
             <template v-else-if="wizardStep === 2">
@@ -825,6 +839,15 @@ function formatUptime(seconds: number): string {
     </Teleport>
 
     <!-- ── Delete Confirm ─────────────────────────────────────────────────── -->
+    <div v-if="enrollmentJSON" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+      <div class="max-w-2xl rounded-xl bg-white p-6 space-y-4">
+        <h3 class="font-semibold">Agent enrollment</h3>
+        <p class="text-sm">This credential is shown once. Save it as agent.json on the remote server, run chmod 600 agent.json, then sudo ./posternproxy-agent install --config-file agent.json --assets-dir . from the extracted matching Linux archive. Delete agent.json afterward. Rotating credentials disconnects the previous agent.</p>
+        <pre class="overflow-auto rounded bg-slate-100 p-4 text-xs select-all">{{ enrollmentJSON }}</pre>
+        <button class="rounded bg-indigo-600 px-4 py-2 text-white" @click="enrollmentJSON = ''">Close</button>
+      </div>
+    </div>
+
     <DeleteConfirmDialog
       v-model="showDeleteConfirm"
       title="Remove Server"

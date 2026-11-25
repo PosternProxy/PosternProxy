@@ -130,6 +130,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to revoke session")
 		return
 	}
+	h.audit.Log(r.Context(), &claims.UserID, "logout", "session", nil, nil, r.RemoteAddr)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",

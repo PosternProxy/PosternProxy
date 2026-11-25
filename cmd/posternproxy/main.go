@@ -1,8 +1,9 @@
 // Command posternproxy starts the PosternProxy controller HTTP server.
 //
-// Two run modes:
+// Run modes:
 //
 //	posternproxy                       — start the server (default)
+//	posternproxy install               — install the controller and dependencies
 //	posternproxy reset-password [--email <addr>]
 //	                                   — generate a new password for an admin
 //	                                     account; the server does NOT need
@@ -31,11 +32,25 @@ import (
 
 // Version is set at build time via -ldflags "-X main.Version=...".
 // Falls back to VCS info from the Go module build stamp, or "dev".
-var Version = buildinfo.Version()
+var Version = "dev"
 
 func main() {
+	if Version == "dev" {
+		Version = buildinfo.Version()
+	}
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	if os.Getenv("POSTERNPROXY_LOG_FORMAT") != "json" {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	}
+
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		buildinfo.WriteVersion(os.Stdout, "posternproxy", Version)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "install" {
+		runInstall(os.Args[2:])
+		return
+	}
 
 	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
 		runResetPassword(os.Args[2:])

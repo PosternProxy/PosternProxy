@@ -5,19 +5,28 @@ weight: 6
 
 # Custom Error Pages
 
-PosternProxy can serve custom HTML pages when a proxy host returns a 404, 502, or 503 status code. This replaces Caddy's default plain-text error responses with your own branded or user-friendly HTML.
+PosternProxy can serve custom HTML for errors raised within Caddy's HTTP
+handling. The UI exposes 502 and 503 pages. Ordinary error-status
+responses returned successfully by an upstream are not intercepted by this
+server-level error handler.
 
 ## Configuration
 
-Open the **Errors** tab of the Add/Edit Proxy Host modal. You will see three panels, one for each supported status code:
+Open the **Errors** tab of the Add/Edit Proxy Host modal. It has two panels:
 
 | Code | Meaning | Common cause |
 |---|---|---|
-| 404 | Not Found | Route exists but upstream returned 404; or path not matched |
 | 502 | Bad Gateway | Upstream is down or returned an invalid response |
 | 503 | Service Unavailable | Upstream is overloaded or in maintenance mode |
 
-Paste your HTML into the relevant textarea. Leave a field blank to use Caddy's default behaviour for that code.
+Paste HTML into the relevant textarea. Blank fields use PosternProxy's
+bundled error pages. An upstream's ordinary 404 response passes through unchanged.
+
+The bundled pages display the PosternProxy logo and automatically follow the
+visitor's system light or dark theme, including preference changes while the page
+is open. Styles and both logo variants are embedded in the response; no JavaScript
+or connection to the controller is required. Custom HTML controls its own branding
+and theme behavior.
 
 <!-- TODO: Screenshot — Errors tab with a 502 page containing HTML -->
 

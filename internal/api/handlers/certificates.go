@@ -56,11 +56,12 @@ func (h *CertificateHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		return
 	}
-	// 10 MB max
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
 		respondError(w, http.StatusBadRequest, "failed to parse form: "+err.Error())
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	name := r.FormValue("name")
 	domainsRaw := r.FormValue("domain_names")

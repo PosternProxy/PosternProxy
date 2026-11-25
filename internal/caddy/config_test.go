@@ -384,3 +384,19 @@ func TestBuildErrorRoutes_DefaultPageIncludesBrandAndVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestParkedHTTPOnlyHasNoHTTPSRoute(t *testing.T) {
+	cfg, err := BuildFullConfig(&BuildInput{DeadHosts: []models.DeadHost{{ID: 99, CaddyID: "park_http", Enabled: true, HTTPOnly: true, DomainNames: json.RawMessage(`["park-http.example"]`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app HTTPApp
+	if err := json.Unmarshal(cfg.Apps["http"], &app); err != nil {
+		t.Fatal(err)
+	}
+	httpJSON, _ := json.Marshal(app.Servers["http"])
+	httpsJSON, _ := json.Marshal(app.Servers["https"])
+	if !strings.Contains(string(httpJSON), "park-http.example") || strings.Contains(string(httpsJSON), "park-http.example") {
+		t.Fatal("HTTP-only parked domain leaked into HTTPS routes")
+	}
+}

@@ -9,7 +9,7 @@ Access tokens let you authenticate to the PosternProxy REST API without using yo
 
 ## Creating a token
 
-1. Click **Access Tokens** in the sidebar (or go to your profile → **API Tokens**)
+1. Click **Access Tokens** in the sidebar
 2. Click **+ Create Token**
 3. Enter a **Name** to identify the token (e.g. `ci-deploy`, `monitoring`)
 4. Choose the scopes and expiration, then click **Create**
@@ -53,7 +53,7 @@ Click the **Delete** icon to revoke a token immediately. Revoked tokens are reje
 
 ## API reference
 
-The full REST API is available at `http://your-server:81/api`. All resources follow the same pattern:
+The REST API is rooted at `http://your-server:81/api`. Host resources use this pattern:
 
 | Method | Path | Description |
 |---|---|---|
@@ -79,8 +79,19 @@ GET  /api/auth/me       # Session access token
 
 ### Example: create a proxy host via API
 
+Writes require a `write` token with an admin creator **and** a matching CSRF
+cookie/header. The CSRF middleware also applies to API tokens. Fetch the cookie
+first using a safe request to the same controller origin:
+
 ```bash
+POSTERNPROXY_URL='http://your-server:81'
+COOKIE_JAR="$(mktemp)"
+curl -fsS -c "$COOKIE_JAR" "$POSTERNPROXY_URL/api/version" >/dev/null
+CSRF_TOKEN="$(awk '$6 == "csrf_token" { print $7 }' "$COOKIE_JAR")"
+
 curl -X POST \
+  -b "$COOKIE_JAR" \
+  -H "X-CSRF-Token: $CSRF_TOKEN" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -88,11 +99,18 @@ curl -X POST \
     "forward_scheme": "http",
     "forward_host": "192.168.1.10",
     "forward_port": 3000,
-    "ssl_forced": true,
-    "enabled": true
+    "ssl_forced": false
   }' \
-  http://your-server:81/api/proxy-hosts
+  "$POSTERNPROXY_URL/api/proxy-hosts"
+
+rm -f "$COOKIE_JAR"
 ```
+
+Use HTTPS for remote management with secure cookies enabled. Read
+[Configuration application status]({{< relref "/multi-server/configuration-status" >}})
+after saving: a resource can be saved while its Caddy application fails or waits
+for an offline agent. This table is a route overview, not a complete schema/API
+specification; see `internal/models/` and handlers for currently accepted fields.
 
 ## Notes
 

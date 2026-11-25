@@ -75,6 +75,7 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	respondJSON(w, http.StatusCreated, srv)
 }
 
@@ -356,11 +357,27 @@ func (h *ServerHandler) ResetJoin(w http.ResponseWriter, r *http.Request) {
 //
 // All failure cases return an identical 401 to prevent server ID enumeration.
 func (h *ServerHandler) AgentConnect(w http.ResponseWriter, r *http.Request) {
+	serverID, ok := h.authenticatedAgent(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	h.hub.ServeWS(serverID, w, r)
+}
+
+func (h *ServerHandler) VerifyAgent(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authenticatedAgent(r); !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ServerHandler) authenticatedAgent(r *http.Request) (int64, bool) {
 	serverIDStr := r.URL.Query().Get("server_id")
 	parts := strings.Fields(r.Header.Get("Authorization"))
 	if r.URL.Query().Has("token") || len(r.Header.Values("Authorization")) != 1 || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+		return 0, false
 	}
 	token := parts[1]
 
@@ -368,11 +385,10 @@ func (h *ServerHandler) AgentConnect(w http.ResponseWriter, r *http.Request) {
 	// safely rejects (no row + dummy bcrypt). No need for a separate branch.
 	serverID, _ := strconv.ParseInt(serverIDStr, 10, 64)
 	if !h.svc.ValidateAgentToken(r.Context(), serverID, token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+		return 0, false
 	}
 
-	h.hub.ServeWS(serverID, w, r)
+	return serverID, true
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -393,4 +409,23 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
+}
+
+func (h *ServerHandler) AgentCredentials(w http.ResponseWriter, r *http.Request) {
+	claims := requireClaims(w, r)
+	if claims == nil {
+		return
+	}
+	id, err := parseID(r)
+	if err != nil {
+		respondError(w, 400, "invalid id")
+		return
+	}
+	config, err := h.svc.AgentCredentials(r.Context(), &claims.UserID, id, r.RemoteAddr)
+	if err != nil {
+		respondServiceError(w, 400, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respondJSON(w, 200, config)
 }

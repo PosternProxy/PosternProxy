@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { reactive, onMounted, watch } from 'vue'
-import type { DeadHost } from '@/types'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { listCertificates } from '@/api/certificates'
+import { listAccessLists } from '@/api/accessLists'
+import type { Certificate, AccessList, DeadHost } from '@/types'
 import {
   listDeadHosts,
   createDeadHost,
@@ -12,11 +14,16 @@ import {
 } from '@/api/deadHosts'
 import { useServerStore } from '@/stores/servers'
 import { useServerContext } from '@/stores/serverContext'
+import TLSStatusBadge from '@/components/TLSStatusBadge.vue'
+import { useTLSStatus } from '@/composables/useTLSStatus'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 import { useResourceList } from '@/composables/useResourceList'
 
+const certificates = ref<Certificate[]>([])
+const accessLists = ref<AccessList[]>([])
 const serverStore = useServerStore()
 const ctx = useServerContext()
+const { tlsFor, tlsError } = useTLSStatus('dead_host')
 
 const {
   items: hosts,
@@ -89,6 +96,9 @@ const starterHtml = `<!DOCTYPE html>
 </html>`
 
 const defaultForm = () => ({
+  http_only: false,
+  certificate_id: null as number | null,
+  access_list_id: null as number | null,
   domainInput: '',
   domain_names: [] as string[],
   server_id: 1,
@@ -101,6 +111,8 @@ const form = reactive(defaultForm())
 onMounted(async () => {
   await serverStore.ensureLoaded()
   await fetchHosts()
+  certificates.value = await listCertificates()
+  accessLists.value = await listAccessLists()
 })
 
 watch(() => ctx.selectedServerId, fetchHosts)
@@ -129,6 +141,9 @@ function openEdit(host: DeadHost) {
   Object.assign(form, {
     domainInput: '',
     domain_names: [...host.domain_names],
+    http_only: host.http_only,
+    certificate_id: host.certificate_id,
+    access_list_id: host.access_list_id,
     server_id: host.server_id ?? 1,
     status_code: host.status_code ?? 404,
     custom_body: host.custom_body ?? '',
@@ -159,6 +174,9 @@ async function saveForm() {
   try {
     const payload: CreateDeadHostInput = {
       domain_names: form.domain_names,
+      http_only: form.http_only,
+      certificate_id: form.http_only ? null : form.certificate_id,
+      access_list_id: form.access_list_id,
       server_id: form.server_id || 1,
       status_code: form.status_code,
       custom_body: form.useCustomBody ? form.custom_body : '',
@@ -232,6 +250,7 @@ function statusBadgeClass(code: number): string {
         <thead class="border-b border-slate-200 bg-slate-50">
           <tr>
             <th class="px-4 py-3 font-medium text-slate-600">Domain Names</th>
+            <th class="px-4 py-3 font-medium text-slate-600">TLS</th>
             <th class="px-4 py-3 font-medium text-slate-600">Response</th>
             <th class="px-4 py-3 font-medium text-slate-600">Status</th>
             <th class="px-4 py-3 text-right font-medium text-slate-600">Actions</th>
@@ -253,6 +272,15 @@ function statusBadgeClass(code: number): string {
                   >{{ d }}</span
                 >
               </div>
+            </td>
+            <td class="px-4 py-3">
+              <TLSStatusBadge
+                :status="tlsFor(host.id)"
+                :server-id="host.server_id"
+                :enabled="host.enabled"
+                :https="!host.http_only"
+                :load-error="tlsError"
+              />
             </td>
             <td class="px-4 py-3">
               <span
@@ -324,6 +352,34 @@ function statusBadgeClass(code: number): string {
             </button>
           </div>
           <div class="space-y-4 overflow-y-auto px-6 py-5" style="max-height: 65vh">
+            <label class="flex items-center gap-2 text-sm"
+              ><input v-model="form.http_only" type="checkbox" /> HTTP only (no certificate)</label
+            >
+            <p v-if="form.http_only" class="text-xs text-slate-500">
+              Serve only over HTTP. No HTTPS route or certificate request is created.
+            </p>
+            <label class="block text-sm"
+              >Certificate
+              <select
+                v-model="form.certificate_id"
+                :disabled="form.http_only"
+                class="w-full rounded border p-2"
+              >
+                <option :value="null">Automatic HTTPS</option>
+                <option v-for="cert in certificates" :key="cert.id" :value="cert.id">
+                  {{ cert.name }}
+                </option>
+              </select>
+            </label>
+            <label class="block text-sm"
+              >Access list
+              <select v-model="form.access_list_id" class="w-full rounded border p-2">
+                <option :value="null">Public</option>
+                <option v-for="list in accessLists" :key="list.id" :value="list.id">
+                  {{ list.name }}
+                </option>
+              </select>
+            </label>
             <div v-if="saveError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">
               {{ saveError }}
             </div>
