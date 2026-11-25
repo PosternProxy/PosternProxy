@@ -34,8 +34,8 @@ type Options struct {
 }
 
 func (o Options) Validate(version string) error {
-	if o.Port < 1 || o.Port > 65535 || o.Port == 80 || o.Port == 443 || o.Port == 2019 {
-		return fmt.Errorf("management port must be between 1 and 65535 and differ from 80, 443, and 2019")
+	if o.Port < 1 || o.Port > 65535 || o.Port == 80 || o.Port == 443 || o.Port == 2019 || o.Port == 8443 {
+		return fmt.Errorf("management port must be between 1 and 65535 and differ from 80, 443, 2019 (Caddy admin), and 8443 (TLS-passthrough bridge)")
 	}
 	if o.Release != "" && !releaseTag.MatchString(o.Release) {
 		return fmt.Errorf("--release must be an exact release tag such as v0.2.0-beta")

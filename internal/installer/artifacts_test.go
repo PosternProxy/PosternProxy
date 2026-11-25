@@ -181,6 +181,7 @@ func TestOptionsValidate(t *testing.T) {
 		{"HTTP conflict", Options{Port: 80}, "v0.2.0", true},
 		{"HTTPS conflict", Options{Port: 443}, "v0.2.0", true},
 		{"Caddy admin conflict", Options{Port: 2019}, "v0.2.0", true},
+		{"passthrough bridge conflict", Options{Port: 8443}, "v0.2.0", true},
 		{"firewall missing SSH", Options{Port: 81, ConfigureFirewall: true}, "v0.2.0", true},
 		{"firewall invalid SSH", Options{Port: 81, ConfigureFirewall: true, SSHPort: 65536}, "v0.2.0", true},
 		{"firewall custom SSH", Options{Port: 81, ConfigureFirewall: true, SSHPort: 2222}, "v0.2.0", false},

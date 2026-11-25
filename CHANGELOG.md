@@ -24,6 +24,12 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
   module; non-passthrough HTTPS is now bridged to an internal loopback HTTPS
   listener over PROXY protocol, preserving the real client IP. Qualified with a
   live pinned-Caddy test that loads the full production config.
+- The TLS-passthrough HTTPS bridge no longer advertises HTTP/3. The bridged
+  HTTPS server offers only HTTP/1.1 and HTTP/2, so it cannot advertise the
+  private loopback bridge port as an unreachable QUIC endpoint.
+- Port 8443 is reserved for the TLS-passthrough bridge: the installer rejects it
+  as a management port, preventing a bind collision that otherwise made Caddy
+  reject the configuration when passthrough was enabled on the same host.
 - UDP stream hosts now forward to their upstream over UDP. Previously the
   generated Layer4 proxy dialed the upstream over TCP regardless of protocol,
   silently breaking UDP forwarding; qualified with a live pinned-Caddy UDP test.

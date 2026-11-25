@@ -11,7 +11,9 @@ import (
 // TLS-passthrough host has taken over :443 at Layer 4. caddy-l4 has no handler
 // that serves the HTTP app in place, so the L4 fallthrough route proxies
 // non-passthrough connections here (carrying PROXY protocol to preserve the
-// client IP) where Caddy terminates TLS normally.
+// client IP) where Caddy terminates TLS normally. Port 8443 is reserved for this
+// bridge — the installer forbids it as a management port so the two cannot
+// collide on a single host.
 const internalHTTPSAddr = "127.0.0.1:8443"
 
 // BuildFullConfig constructs the complete Caddy JSON configuration from all
@@ -262,9 +264,14 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 	}
 
 	// HTTP/2 is a server-wide setting; restrict the HTTPS listener to HTTP/1.1
-	// when disabled for this server.
-	if in.HTTP2Disabled {
+	// when disabled for this server. In passthrough mode the HTTPS server sits
+	// behind a TCP-only L4 bridge, so HTTP/3 (QUIC/UDP) cannot reach it and would
+	// otherwise advertise the private bridge port as its endpoint — offer h1/h2.
+	switch {
+	case in.HTTP2Disabled:
 		httpApp.Servers["https"].Protocols = []string{"h1"}
+	case hasTLSPassthrough:
+		httpApp.Servers["https"].Protocols = []string{"h1", "h2"}
 	}
 
 	httpRaw, err := json.Marshal(httpApp)

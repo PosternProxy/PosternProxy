@@ -70,6 +70,11 @@ func TestPassthroughConfigBridgesWithProxyProtocol(t *testing.T) {
 	if len(https.ListenerWrappers[0].Allow) != 1 || https.ListenerWrappers[0].Allow[0] != "127.0.0.1/32" {
 		t.Fatalf("proxy_protocol wrapper must only trust loopback, got %+v", https.ListenerWrappers[0].Allow)
 	}
+	// The bridge is TCP-only, so HTTP/3 must not be advertised (it would point at
+	// the private bridge port as its QUIC endpoint).
+	if len(https.Protocols) != 2 || https.Protocols[0] != "h1" || https.Protocols[1] != "h2" {
+		t.Fatalf("passthrough HTTPS must offer only h1/h2 (no HTTP/3), got %+v", https.Protocols)
+	}
 }
 
 // Without any passthrough host, the HTTPS server keeps its public :443 listener
@@ -95,5 +100,9 @@ func TestNonPassthroughConfigKeepsPublicHTTPS(t *testing.T) {
 	}
 	if len(https.ListenerWrappers) != 0 {
 		t.Fatalf("no listener wrappers expected without passthrough, got %+v", https.ListenerWrappers)
+	}
+	// Default protocols (h1/h2/h3) left to Caddy; HTTP/3 is reachable on :443.
+	if https.Protocols != nil {
+		t.Fatalf("non-passthrough HTTPS should use Caddy default protocols, got %+v", https.Protocols)
 	}
 }
