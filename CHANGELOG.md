@@ -19,9 +19,20 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Enabling a TLS-passthrough host no longer rejects the whole Caddy
+  configuration. The generated fallthrough used a nonexistent `layer4.handlers.http`
+  module; non-passthrough HTTPS is now bridged to an internal loopback HTTPS
+  listener over PROXY protocol, preserving the real client IP. Qualified with a
+  live pinned-Caddy test that loads the full production config.
 - UDP stream hosts now forward to their upstream over UDP. Previously the
   generated Layer4 proxy dialed the upstream over TCP regardless of protocol,
   silently breaking UDP forwarding; qualified with a live pinned-Caddy UDP test.
+- Combined `tcp+udp` stream hosts now forward each transport to its own network.
+  Previously both listeners shared a single TCP upstream dial, so UDP traffic in
+  combined mode was sent over TCP.
+- Rejected settings edits no longer record attempted values in the audit log.
+  Unknown or secret-bearing keys (e.g. `api_key`) now have their values masked,
+  so a rejected bulk update cannot leak a secret into the audit record.
 - First-time controller installation prints the initial admin login after readiness,
   using temporary private runtime configuration instead of service password logs.
   Reinstalling preserves existing passwords.

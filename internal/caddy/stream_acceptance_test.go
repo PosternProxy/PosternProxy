@@ -104,10 +104,10 @@ func launchCaddy(t *testing.T, binary string, cfg *Config) {
 }
 
 // neutralizeHTTP rewrites the generated HTTP app so it cannot bind privileged
-// ports or trigger ACME during a local acceptance run. When keepHTTPS is false
-// the :443 server is removed entirely; when true its listener is cleared (used
-// by the TLS-passthrough fallthrough bridge) so the config stays valid.
-func neutralizeHTTP(t *testing.T, cfg *Config, keepHTTPS bool) {
+// ports or trigger ACME during a local acceptance run: :80 moves to a loopback
+// free port with automatic HTTPS disabled, and the :443 server is removed. Used
+// by tests that exercise only the Layer4 data path.
+func neutralizeHTTP(t *testing.T, cfg *Config) {
 	t.Helper()
 	raw, ok := cfg.Apps["http"]
 	if !ok {
@@ -121,14 +121,7 @@ func neutralizeHTTP(t *testing.T, cfg *Config, keepHTTPS bool) {
 		s.Listen = []string{"127.0.0.1:" + strconv.Itoa(freeTCPPort(t))}
 		s.AutomaticHTTPS = &AutoHTTPS{Disable: true}
 	}
-	if keepHTTPS {
-		if s := app.Servers["https"]; s != nil {
-			s.Listen = []string{}
-			s.AutomaticHTTPS = &AutoHTTPS{Disable: true}
-		}
-	} else {
-		delete(app.Servers, "https")
-	}
+	delete(app.Servers, "https")
 	b, err := json.Marshal(app)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +175,7 @@ func TestPinnedCaddyUDPForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	neutralizeHTTP(t, cfg, false)
+	neutralizeHTTP(t, cfg)
 
 	// Bind the UDP listener to loopback on our chosen free port.
 	var l4 Layer4App
@@ -251,27 +244,44 @@ func TestPinnedCaddyTLSPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	neutralizeHTTP(t, cfg, false)
-
-	// Bind the L4 :443 server to loopback on a free port.
+	// Rewrite listeners to loopback free ports WITHOUT removing the generated
+	// fallthrough route. That route (a proxy_protocol bridge to the internal
+	// HTTPS listener) must be present so this exercises the real config Caddy
+	// loads — the earlier tls+http handler form was rejected as an unknown module.
 	l4Port := freeTCPPort(t)
+	httpsPort := freeTCPPort(t)
+
 	var l4 Layer4App
 	if err := json.Unmarshal(cfg.Apps["layer4"], &l4); err != nil {
 		t.Fatal(err)
 	}
 	server := l4.Servers["tls_passthrough_443"]
-	// Keep only the SNI-matched passthrough route; drop the generated fallthrough
-	// (tls+http bridge) which would need a live terminating HTTP app not present
-	// in this harness. The fallthrough path belongs to the broader HTTPS matrix.
-	kept := server.Routes[:0]
+	server.Listen = []string{"127.0.0.1:" + strconv.Itoa(l4Port)}
 	for _, r := range server.Routes {
-		if len(r.Match) > 0 {
-			kept = append(kept, r)
+		// The fallthrough route has no SNI match; point its bridge at httpsPort.
+		if len(r.Match) == 0 && len(r.Handle) > 0 && len(r.Handle[0].Upstreams) > 0 {
+			r.Handle[0].Upstreams[0].Dial = []string{"127.0.0.1:" + strconv.Itoa(httpsPort)}
 		}
 	}
-	server.Routes = kept
-	server.Listen = []string{"127.0.0.1:" + strconv.Itoa(l4Port)}
 	cfg.Apps["layer4"], err = json.Marshal(l4)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Move :80 off a privileged port and the internal HTTPS listener onto
+	// httpsPort, keeping its proxy_protocol + tls listener wrappers intact.
+	var httpApp HTTPApp
+	if err := json.Unmarshal(cfg.Apps["http"], &httpApp); err != nil {
+		t.Fatal(err)
+	}
+	if s := httpApp.Servers["http"]; s != nil {
+		s.Listen = []string{"127.0.0.1:" + strconv.Itoa(freeTCPPort(t))}
+		s.AutomaticHTTPS = &AutoHTTPS{Disable: true}
+	}
+	if s := httpApp.Servers["https"]; s != nil {
+		s.Listen = []string{"127.0.0.1:" + strconv.Itoa(httpsPort)}
+	}
+	cfg.Apps["http"], err = json.Marshal(httpApp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +300,7 @@ func TestPinnedCaddyTLSPassthrough(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !ready {
-		t.Fatal("Caddy failed to bind the TLS passthrough listener")
+		t.Fatal("Caddy failed to load the passthrough config / bind the L4 listener")
 	}
 
 	// Send SNI "passthrough.test" so Caddy matches the passthrough route, but

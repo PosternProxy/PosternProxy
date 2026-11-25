@@ -29,6 +29,7 @@ type HTTPServer struct {
 	IdleTimeout          string              `json:"idle_timeout,omitempty"`
 	MaxHeaderBytes       int                 `json:"max_header_bytes,omitempty"`
 	Listen               []string            `json:"listen"`
+	ListenerWrappers     []ListenerWrapper   `json:"listener_wrappers,omitempty"`
 	Routes               []*Route            `json:"routes,omitempty"`
 	Errors               *ServerErrors       `json:"errors,omitempty"`
 	AutomaticHTTPS       *AutoHTTPS          `json:"automatic_https,omitempty"`
@@ -315,6 +316,17 @@ type L4TLSMatcher struct {
 type L4Handler struct {
 	Handler   string       `json:"handler"`
 	Upstreams []L4Upstream `json:"upstreams,omitempty"`
+	// ProxyProtocol, when set ("v1"/"v2"), makes a proxy handler send a PROXY
+	// header to the upstream so a terminating server can recover the client IP.
+	ProxyProtocol string `json:"proxy_protocol,omitempty"`
+}
+
+// ListenerWrapper is an entry in an HTTP server's listener_wrappers. The
+// "proxy_protocol" wrapper reads a PROXY header from allowed sources; the "tls"
+// wrapper is the placeholder that must follow it so Caddy still terminates TLS.
+type ListenerWrapper struct {
+	Wrapper string   `json:"wrapper"`
+	Allow   []string `json:"allow,omitempty"`
 }
 
 type L4Upstream struct {

@@ -88,7 +88,7 @@ func (s *AuditService) Log(ctx context.Context, userID *int64, action, resourceT
 // any future secret-bearing key (API keys, passwords, tokens).
 func sensitiveSettingKey(key string) bool {
 	lower := strings.ToLower(key)
-	for _, marker := range []string{"secret", "password", "passwd", "token", "credential", "private"} {
+	for _, marker := range []string{"secret", "password", "passwd", "token", "credential", "private", "key", "auth"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -111,13 +111,33 @@ func redactSettings(values map[string]string) map[string]string {
 	return safe
 }
 
+// redactValues masks every value, preserving only the keys. Used for a rejected
+// settings attempt, whose values are unvalidated input (unknown keys bypass the
+// name-based allowlist, so no value can be trusted as non-secret).
+func redactValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	safe := make(map[string]string, len(values))
+	for k := range values {
+		safe[k] = "[redacted]"
+	}
+	return safe
+}
+
 // SettingsChange records a settings edit with a redacted before/after snapshot
 // and an explicit success outcome. Like the other helpers it is best-effort.
+// On a rejected change every attempted value is masked so an unknown or
+// secret-bearing key cannot leak its value into the audit record.
 func (s *AuditService) SettingsChange(ctx context.Context, actor *int64, success bool, before, after map[string]string, ip string) {
+	afterSnapshot := redactSettings(after)
+	if !success {
+		afterSnapshot = redactValues(after)
+	}
 	_ = s.Log(ctx, actor, "update", "settings", nil, map[string]any{
 		"success": success,
 		"before":  redactSettings(before),
-		"after":   redactSettings(after),
+		"after":   afterSnapshot,
 	}, ip)
 }
 

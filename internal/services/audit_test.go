@@ -106,3 +106,40 @@ func TestSettingsChangeRedactsSensitiveValues(t *testing.T) {
 			details.Before["api_secret"], details.After["api_secret"])
 	}
 }
+
+// A rejected settings change carries unvalidated input (unknown keys like
+// api_key). Its values must never reach the audit record verbatim.
+func TestSettingsChangeRejectionMasksAttemptedValues(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	svc := NewAuditService(db)
+
+	before := map[string]string{"caddy_api_url": "http://current"}
+	attempted := map[string]string{"api_key": "super-secret-sentinel", "unknown_flag": "whatever"}
+	svc.SettingsChange(ctx, nil, false, before, attempted, "1.2.3.4")
+
+	entries, _, err := svc.List(ctx, "settings", nil, 1, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 settings entry, got %d", len(entries))
+	}
+	if raw := string(entries[0].Details); strings.Contains(raw, "super-secret-sentinel") {
+		t.Fatalf("rejected attempt leaked a value into the audit record: %s", raw)
+	}
+
+	var details struct {
+		Success bool              `json:"success"`
+		After   map[string]string `json:"after"`
+	}
+	if err := json.Unmarshal(entries[0].Details, &details); err != nil {
+		t.Fatalf("unmarshal details: %v", err)
+	}
+	if details.Success {
+		t.Fatal("rejected change must record success=false")
+	}
+	if details.After["api_key"] != "[redacted]" || details.After["unknown_flag"] != "[redacted]" {
+		t.Fatalf("rejected attempt values must be masked, got %v", details.After)
+	}
+}

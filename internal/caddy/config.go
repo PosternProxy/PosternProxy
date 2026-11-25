@@ -7,6 +7,13 @@ import (
 	"github.com/posternproxy/posternproxy/internal/models"
 )
 
+// internalHTTPSAddr is the loopback address the HTTPS server listens on when a
+// TLS-passthrough host has taken over :443 at Layer 4. caddy-l4 has no handler
+// that serves the HTTP app in place, so the L4 fallthrough route proxies
+// non-passthrough connections here (carrying PROXY protocol to preserve the
+// client IP) where Caddy terminates TLS normally.
+const internalHTTPSAddr = "127.0.0.1:8443"
+
 // BuildFullConfig constructs the complete Caddy JSON configuration from all
 // enabled entities. This is the DB → Caddy translation layer.
 func BuildFullConfig(in *BuildInput) (*Config, error) {
@@ -141,12 +148,14 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 	}
 
 	// --- Stream hosts (Layer 4) ---
-	for _, h := range in.StreamHosts {
+	for i := range in.StreamHosts {
+		h := in.StreamHosts[i]
 		if !h.Enabled {
 			continue
 		}
-		key := StreamServerKey(&h)
-		l4Servers[key] = BuildStreamServer(&h)
+		for key, server := range BuildStreamServers(&h) {
+			l4Servers[key] = server
+		}
 	}
 
 	// --- TLS passthrough hosts → L4 server on :443 ---
@@ -166,13 +175,16 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 			l4Routes = append(l4Routes, r)
 		}
 
-		// Fallthrough route: terminate TLS and route to the Caddy HTTP app
-		// (handles all non-passthrough SNI traffic on port 443).
+		// Fallthrough route: proxy all non-passthrough SNI traffic to the internal
+		// HTTPS listener, which terminates TLS and serves the HTTP app. PROXY
+		// protocol v2 carries the real client IP across the loopback hop.
+		// (caddy-l4 has no "http" handler, so terminating in place is impossible.)
 		l4Routes = append(l4Routes, &L4Route{
-			Handle: []L4Handler{
-				{Handler: "tls"},
-				{Handler: "http"},
-			},
+			Handle: []L4Handler{{
+				Handler:       "proxy",
+				ProxyProtocol: "v2",
+				Upstreams:     []L4Upstream{{Dial: []string{internalHTTPSAddr}}},
+			}},
 		})
 
 		l4Servers["tls_passthrough_443"] = &L4Server{
@@ -197,7 +209,8 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 	//   (the L4 internal bridge delivers connections to the HTTP app).
 	httpsListen := []string{":443"}
 	if hasTLSPassthrough {
-		httpsListen = []string{} // L4 feeds the HTTP app directly
+		// L4 owns :443 and proxies non-passthrough traffic here over loopback.
+		httpsListen = []string{internalHTTPSAddr}
 	}
 
 	// Build per-host custom error pages → server-level error routes.
@@ -234,6 +247,17 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 			server.TrustedProxies = &TrustedProxySource{Source: "static", Ranges: trusted}
 			server.TrustedProxiesStrict = 1
 			server.ClientIPHeaders = []string{"X-Forwarded-For"}
+		}
+	}
+
+	if hasTLSPassthrough {
+		// The L4 bridge hands non-passthrough connections to the loopback HTTPS
+		// listener with a PROXY header; read it (only from loopback) to recover
+		// the client IP, then terminate TLS. The tls wrapper must follow
+		// proxy_protocol in the chain.
+		httpApp.Servers["https"].ListenerWrappers = []ListenerWrapper{
+			{Wrapper: "proxy_protocol", Allow: []string{"127.0.0.1/32"}},
+			{Wrapper: "tls"},
 		}
 	}
 
