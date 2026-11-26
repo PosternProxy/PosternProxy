@@ -7,6 +7,9 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Initialize the browser test CSRF cookie through an authenticated safe request
+  instead of racing dashboard requests after login.
+
 ## [0.1.5-beta] 2026-11-26
 
 - Release IIS-owned HTTP ports on disposable Windows CI runners and check required

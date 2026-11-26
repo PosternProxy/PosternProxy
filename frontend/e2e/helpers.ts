@@ -14,15 +14,20 @@ export async function login(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/dashboard$/)
 }
 
-// Returns the Authorization + CSRF headers for direct API assertions, mirroring
-// the double-submit cookie the SPA uses. Must be called after login().
+// Returns API headers for an authenticated context, including API-only sessions
+// that have not made the safe request which seeds the SPA's CSRF cookie.
 export async function apiHeaders(context: BrowserContext): Promise<Record<string, string>> {
   const refresh = await context.request.post('/api/auth/refresh')
   expect(refresh.status()).toBe(201)
   const { access_token } = (await refresh.json()) as { access_token: string }
+  const authorization = `Bearer ${access_token}`
+  const identity = await context.request.get('/api/auth/me', {
+    headers: { Authorization: authorization },
+  })
+  expect(identity.status()).toBe(200)
   const csrf = (await context.cookies()).find((cookie) => cookie.name === 'csrf_token')
   expect(csrf).toBeDefined()
-  return { Authorization: `Bearer ${access_token}`, 'X-CSRF-Token': csrf!.value }
+  return { Authorization: authorization, 'X-CSRF-Token': csrf!.value }
 }
 
 type ProxyHost = { id: number; domain_names: string[]; enabled: boolean; forward_port: number }

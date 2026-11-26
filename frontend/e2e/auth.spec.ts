@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { apiHeaders, login } from './helpers'
 
 test('login, reload using the refresh cookie, and logout', async ({ page, context }) => {
   await page.goto('/dashboard')
@@ -22,18 +23,10 @@ test('login, reload using the refresh cookie, and logout', async ({ page, contex
 })
 
 test('saved configuration has a visible application failure', async ({ page, context }) => {
-  await page.goto('/login')
-  await page.getByLabel('Email').fill('admin@e2e.test')
-  await page.getByLabel('Password').fill('Disposable-browser-test-password')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard$/)
-  const refresh = await context.request.post('/api/auth/refresh')
-  expect(refresh.status()).toBe(201)
-  const { access_token } = (await refresh.json()) as { access_token: string }
-  const csrf = (await context.cookies()).find((cookie) => cookie.name === 'csrf_token')
-  expect(csrf).toBeDefined()
+  await login(page)
+  const headers = await apiHeaders(context)
   const result = await context.request.post('/api/proxy-hosts', {
-    headers: { Authorization: `Bearer ${access_token}`, 'X-CSRF-Token': csrf!.value },
+    headers,
     data: {
       domain_names: ['failed-apply.e2e.test'],
       forward_scheme: 'http',
@@ -76,15 +69,8 @@ test('manual enrollment exposes credentials once and settings reflect runtime', 
 })
 
 test('parked domains expose HTTP-only mode and TLS diagnostics', async ({ page, context }) => {
-  await page.goto('/login')
-  await page.getByLabel('Email').fill('admin@e2e.test')
-  await page.getByLabel('Password').fill('Disposable-browser-test-password')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard$/)
-  const refresh = await context.request.post('/api/auth/refresh')
-  const { access_token } = (await refresh.json()) as { access_token: string }
-  const csrf = (await context.cookies()).find((cookie) => cookie.name === 'csrf_token')!
-  const headers = { Authorization: `Bearer ${access_token}`, 'X-CSRF-Token': csrf.value }
+  await login(page)
+  const headers = await apiHeaders(context)
   const created = await context.request.post('/api/dead-hosts', {
     headers,
     data: {

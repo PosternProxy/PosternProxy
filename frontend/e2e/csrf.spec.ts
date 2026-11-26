@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { apiHeaders, login } from './helpers'
+import { ADMIN, apiHeaders, login } from './helpers'
 
 const host = {
   domain_names: ['csrf.e2e.test'],
@@ -7,6 +7,19 @@ const host = {
   forward_host: '127.0.0.1',
   forward_port: 8080,
 }
+
+test('API headers initialize CSRF without dashboard requests', async ({ context }) => {
+  const response = await context.request.post('/api/auth/login', { data: ADMIN })
+  expect(response.status()).toBe(201)
+  expect((await context.cookies()).some((cookie) => cookie.name === 'csrf_token')).toBe(false)
+
+  const headers = await apiHeaders(context)
+  const csrf = (await context.cookies()).find((cookie) => cookie.name === 'csrf_token')
+  expect(csrf).toBeDefined()
+  expect(headers['X-CSRF-Token']).toBe(csrf!.value)
+  const authenticated = await context.request.get('/api/auth/me', { headers })
+  expect(authenticated.status()).toBe(200)
+})
 
 test('CSRF double-submit is enforced on state-changing requests', async ({ page, context }) => {
   await login(page)

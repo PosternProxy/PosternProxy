@@ -4,11 +4,13 @@ Updated 2026-11-26. Target is **v0.1.5-beta**. The earlier v0.1.4-beta tag
 remains on its original candidate; its prepared, unpublished changes are included
 in v0.1.5-beta. Do not move the old tag.
 
-The owner reports the updated manual Release candidates run is all green;
-Package was correctly skipped because that run was manual. Commit and push this
-metadata update before tagging. The tag-triggered run must qualify the exact
-version-stamped artifacts and create the draft. No release has been published
-by this preparation.
+An earlier manual candidate run was green, but the subsequent v0.1.5-beta run
+exposed a browser-helper CSRF initialization race. Keep v0.1.5-beta as the intended
+release version while correcting this unpublished candidate. Commit fixes to the
+release branch and let normal CI pass before updating the candidate tag.
+A failed CI attempt does not require a version bump. Package remains skipped for
+manual runs; the final tag-triggered run qualifies version-stamped artifacts and
+creates the draft. No release has been published by this preparation.
 Use the steps in order. Stop on a failed command or failed required Actions job.
 
 ## What is complete
@@ -79,20 +81,37 @@ git log -1 --format="%H %s"
 The tree must be clean and HEAD must be the reviewed merge/candidate. If a local
 master cannot fast-forward (for example a squash merge), switch to a clean branch
 at `origin/master`; do not reset or discard local work. Optional: on GitHub Actions,
-run **Release candidates** manually on master for pre-tag qualification. Manual
-runs qualify and upload artifacts but do not create a release. The workflow must
+run **Release candidates** manually on master for additional pre-tag qualification.
+This is optional; tag pushes remain the release/package trigger. Manual runs
+qualify and upload platform artifacts but do not create the release package. The workflow must
 first be on the default branch to expose its Run workflow button.
 
-## 3. Create the exact beta tag
+## 3. Update only the unpublished candidate tag after qualification
+
+The v0.1.5-beta tag already exists on a failed candidate. Do not create another
+version merely to retry CI. First get the corrected branch green in normal CI. Verify in GitHub Releases that v0.1.5-beta has never been published or
+distributed. Published release tags remain immutable. If there is any uncertainty,
+stop before replacing the tag. An existing unpublished draft must be removed or
+updated so the final packaging run does not reuse stale assets.
+
+Only after those checks, on the exact reviewed/qualified commit, record the remote
+candidate object and replace that unpublished candidate with a guarded push:
 
 ```powershell
-git ls-remote --tags origin refs/tags/v0.1.5-beta
-git tag -a v0.1.5-beta -m "PosternProxy v0.1.5-beta"
-git push origin v0.1.5-beta
+$remoteTag = git ls-remote --refs origin refs/tags/v0.1.5-beta
+if ($LASTEXITCODE -ne 0 -or @($remoteTag).Count -ne 1) { throw 'Cannot resolve the candidate tag' }
+$oldCandidate = ($remoteTag -split '\s+')[0]
+Write-Output "Previous unpublished candidate tag object: $oldCandidate"
+git tag -f -a v0.1.5-beta -m "PosternProxy v0.1.5-beta" HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Local candidate tag update failed' }
+git push "--force-with-lease=refs/tags/v0.1.5-beta:$oldCandidate" origin refs/tags/v0.1.5-beta
+if ($LASTEXITCODE -ne 0) { throw 'Candidate update rejected; inspect remote state before retrying' }
 ```
 
-The first command should show no existing tag. If the name already exists, choose
-a new version and update notes/changelog; do not move an existing published tag.
+The lease rejects an unexpected remote tag change. Do not replace it with an
+unguarded force push. Record the old tag object, new commit and Actions URL in
+release evidence. The tag-triggered run still qualifies all exact stamped assets.
+
 The tag push starts **Release candidates**. Wait for all jobs:
 
 - Quality: Go test/race/vet/vulnerability/module checks, frontend/browser/audit,
@@ -103,8 +122,10 @@ The tag push starts **Release candidates**. Wait for all jobs:
 - Docker amd64 and arm64: production source images and Compose qualification.
 - Package: succeeds only after all above, writes checksums and creates a **draft**.
 
-If a runner is unavailable or a job fails, fix it and qualify a new immutable
-candidate/tag. Do not publish a partial draft or treat QEMU as native ARM CI.
+If a runner is unavailable or a job fails, fix and qualify the release branch
+while keeping the intended version. Replace only an unpublished candidate tag
+once the fixes are qualified; do not move a published release tag. Do not publish
+a partial draft or treat QEMU as native ARM CI.
 
 ## 4. Review the draft and its exact downloadable bundles
 
