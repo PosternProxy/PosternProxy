@@ -7,6 +7,12 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Release IIS-owned HTTP ports on disposable Windows CI runners and check required
+  TCP/UDP ports before service qualification starts.
+
+- Start traffic acceptance cases on fresh connections after Caddy policy reloads
+  to avoid intermittent broken-pipe failures during the upload check.
+
 - Report redacted agent, configuration and listener diagnostics when Windows
   service qualification times out instead of hiding polling errors.
 

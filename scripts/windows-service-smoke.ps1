@@ -90,6 +90,10 @@ function Check-Removal([string]$Role) {
     } "$Role services and child processes removed"
 }
 try {
+    Wait-Check {
+        Assert-SmokePortsAvailable -TCPPorts @(80, 443, 2019, 18181, 18182) -UDPPorts @(443)
+        $true
+    } 'required listen ports available' -Attempts 20
     $output = Install-Controller
     $email = [regex]::Match($output, '(?m)^Email: (.+)\r?$').Groups[1].Value.Trim()
     $password = [regex]::Match($output, '(?m)^Password: (.+)\r?$').Groups[1].Value.Trim()

@@ -136,7 +136,9 @@ func TestPinnedCaddyClientIdentityAndStreaming(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
 	request := func(t *testing.T, path, xff string, wantStatus int, wantBody string) {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(ctx, "GET", endpoint+path, nil)
@@ -157,6 +159,9 @@ func TestPinnedCaddyClientIdentityAndStreaming(t *testing.T) {
 		if err := api.Load(makeConfig(trust, acl, rate)); err != nil {
 			t.Fatal(err)
 		}
+		// Reload retires idle connections asynchronously. Each policy case must
+		// use the new server rather than race a closing connection from the last.
+		transport.CloseIdleConnections()
 	}
 	t.Run("direct ignores spoofed headers", func(t *testing.T) {
 		request(t, "/", "198.51.100.7", 200, "127.0.0.1|127.0.0.1")

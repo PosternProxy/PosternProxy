@@ -24,10 +24,28 @@ reproduced. No timeout increase or readiness bypass was introduced.
   and credential redaction. Regressions and PowerShell parsing pass locally.
 - CI invokes those regressions before the existing Go checks.
 
+## Follow-up evidence and fix
+The next candidate diagnostics identify the actual failure: online=true,
+configuration revision desired=1/applied=0/status=failed. Caddy repeatedly rejects
+its configuration because :80 cannot bind; port 80 is owned by Windows System,
+PID 4 (HTTP.sys). Agent authentication and both SCM services work. The log proves
+the port conflict, not which HTTP.sys client owns the registration.
+
+CI preparation now stops the IIS W3SVC/WAS services on the disposable GitHub-hosted
+runner, guarded by RUNNER_ENVIRONMENT=github-hosted. No application installer or
+local-machine qualification stops unrelated services. The smoke harness probes
+its required TCP ports and UDP 443 before installation, with bounded polling for
+port release; another owner/reservation fails with an explicit port error.
+
+Regression checks for occupied/released TCP and UDP ports pass locally, alongside
+redaction/retry/timeout helper tests. PowerShell script/inline-step parsing,
+actionlint and git diff --check pass. This workstation's services were not altered.
+The hosted-runner IIS preparation and full SCM scenario need the updated CI run.
+
 ## Remaining release blocker
 Run Release candidates manually on the branch containing these changes (workflow
-is already available on default master), inspect diagnostics if it fails, fix the
-proven underlying cause, and repeat all gates. Rerunning the existing tagged job
+is already available on default master), confirm IIS preparation releases port 80 and the full
+SCM/agent/TLS scenario passes, and repeat all gates. Rerunning the existing tagged job
 uses the old script. Do not publish the failed v0.1.4-beta candidate or move its
 tag; qualify/tag a new candidate once the changes are accepted. The existing
 owner-runbook clarification remains an independent uncommitted change.

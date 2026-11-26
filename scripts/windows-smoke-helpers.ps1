@@ -1,3 +1,22 @@
+function Assert-SmokePortsAvailable([int[]]$TCPPorts = @(), [int[]]$UDPPorts = @()) {
+    foreach ($port in $TCPPorts) {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $port)
+        try {
+            $listener.Server.ExclusiveAddressUse = $true
+            $listener.Start()
+        } catch { throw "TCP listen port $port is unavailable: $($_.Exception.Message)" }
+        finally { $listener.Stop() }
+    }
+    foreach ($port in $UDPPorts) {
+        $socket = [Net.Sockets.UdpClient]::new()
+        try {
+            $socket.ExclusiveAddressUse = $true
+            $socket.Client.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Any, $port))
+        } catch { throw "UDP listen port $port is unavailable: $($_.Exception.Message)" }
+        finally { $socket.Dispose() }
+    }
+}
+
 function Protect-SmokeDiagnostic([string]$Text, [string[]]$Secrets = @()) {
     foreach ($secret in $Secrets) {
         if ($secret) { $Text = $Text.Replace($secret, '[REDACTED]') }

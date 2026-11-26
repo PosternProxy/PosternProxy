@@ -37,6 +37,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build native Windows bundle
         run: ./scripts/build.ps1 -GoOS windows -GoArch amd64
+      - name: Release IIS ports on the disposable hosted runner
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'IIS preparation is restricted to disposable GitHub-hosted runners.'
+          }
+          foreach ($name in @('W3SVC', 'WAS')) {
+            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($service -and $service.Status -ne 'Stopped') {
+              Write-Host "Stopping runner IIS service $name"
+              Stop-Service -Name $name -Force -ErrorAction Stop
+            }
+          }
       - name: Qualify Windows service install, reinstall, agent, TLS and removal
         run: ./scripts/windows-service-smoke.ps1 -AssetsDir ./bin -Version $env:POSTERNPROXY_BUILD_VERSION -DisposableHost
       - name: Package Windows binaries
