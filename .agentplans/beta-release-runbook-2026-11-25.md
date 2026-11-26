@@ -106,6 +106,12 @@ limitations pages at your documentation URL.
 
 Required assets:
 
+This list describes the assets attached to the GitHub release draft, not the
+local `bin/` directory. The local PowerShell build produces one target at a time
+in `bin/`. The tagged Release candidates workflow builds all targets, packages
+them in runner-local `release/` directories, and attaches the combined assets to
+the draft. Do not upload stale development files from `bin/` as release assets.
+
 - `posternproxy-linux-amd64.tar.gz`, `posternproxy-linux-arm64.tar.gz`.
 - `posternproxy-windows-amd64.zip`.
 - Loose controller, agent and Caddy executables for each of those three targets.

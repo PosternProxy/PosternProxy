@@ -20,14 +20,9 @@ $fixture = $null
 $base = 'http://127.0.0.1:18181'
 $script:session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
 $script:headers = @{}
+$script:diagnosticSecrets = @()
+. (Join-Path $PSScriptRoot 'windows-smoke-helpers.ps1')
 
-function Wait-Check([scriptblock]$Check, [string]$Description) {
-    for ($attempt = 0; $attempt -lt 120; $attempt++) {
-        try { if (& $Check) { Write-Host "PASS $Description"; return } } catch { }
-        Start-Sleep -Milliseconds 500
-    }
-    throw "Timed out: $Description"
-}
 function Invoke-API([string]$Path, [string]$Method = 'GET', $Body = $null) {
     $arguments = @{Uri="$base/api$Path"; Method=$Method; WebSession=$script:session; Headers=$script:headers; TimeoutSec=5}
     if ($null -ne $Body) { $arguments.Body = ConvertTo-Json $Body -Depth 10 -Compress; $arguments.ContentType = 'application/json' }
@@ -37,6 +32,7 @@ function Login([string]$Email, [string]$Password) {
     $script:headers = @{}
     $result = Invoke-API '/auth/login' 'POST' @{email=$Email; password=$Password}
     $script:headers = @{Authorization="Bearer $($result.access_token)"; 'X-CSRF-Token'=$script:session.Cookies.GetCookies([uri]$base)['csrf_token'].Value}
+    $script:diagnosticSecrets += @($Password, $result.access_token, $script:headers['X-CSRF-Token'])
 }
 function Install-Controller {
     $settings = Join-Path $work 'controller-settings.json'
@@ -56,6 +52,33 @@ function Read-ServiceLog([string]$Path) {
     $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
     $reader = [IO.StreamReader]::new($stream)
     try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+function Write-AgentDiagnostics {
+    foreach ($name in @('posternproxy-agent', 'posternproxy-caddy')) {
+        $service = Get-Service $name -ErrorAction SilentlyContinue
+        Write-Host "Service $name status: $($service.Status)"
+    }
+    Write-Host ('Last readiness observation: ' + (Protect-SmokeDiagnostic $script:readinessObservation $script:diagnosticSecrets))
+    foreach ($port in @(80, 443, 2019)) {
+        foreach ($listener in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+            $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            Write-Host "Listener port=$port process=$($owner.ProcessName) pid=$($listener.OwningProcess)"
+        }
+    }
+    foreach ($path in @((Join-Path $dataRoot 'posternproxy-agent/service.log'), (Join-Path $dataRoot 'caddy/service.log'), (Join-Path $work 'fixture.err'))) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        Write-Host "Diagnostic events from $([IO.Path]::GetFileName([IO.Path]::GetDirectoryName($path)))/$([IO.Path]::GetFileName($path)):"
+        foreach ($line in @((Read-ServiceLog $path) -split "`n" | Select-Object -Last 40)) {
+            try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            $summary = [ordered]@{}
+            foreach ($field in @('level', 'message', 'msg', 'error', 'controller_host', 'server_id', 'retry_in')) {
+                if ($null -ne $event.$field) { $summary[$field] = $event.$field }
+            }
+            if ($summary.Count) {
+                Write-Host (Protect-SmokeDiagnostic (ConvertTo-Json $summary -Compress -Depth 3) $script:diagnosticSecrets)
+            }
+        }
+    }
 }
 function Check-Removal([string]$Role) {
     $installed = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PosternProxy'
@@ -101,6 +124,7 @@ try {
         POSTERNPROXY_DB_PATH=(Join-Path $fixtureData 'test.db'); POSTERNPROXY_CERT_DIR=(Join-Path $fixtureData 'certs');
         POSTERNPROXY_CERT_RUNTIME_DIR=(Join-Path $fixtureData 'runtime'); POSTERNPROXY_CADDY_API='http://127.0.0.1:1';
         POSTERNPROXY_ADMIN_EMAIL='fixture@example.test'; POSTERNPROXY_ADMIN_PASSWORD=$fixturePassword;
+        POSTERNPROXY_LOG_FORMAT='json';
         POSTERNPROXY_BEHIND_TLS_PROXY='false'; POSTERNPROXY_CONTROLLER_URL='http://127.0.0.1:18182'
     }
     $fixture = Start-Process -FilePath $controller -PassThru -WindowStyle Hidden -Environment $environment -RedirectStandardOutput (Join-Path $work 'fixture.out') -RedirectStandardError (Join-Path $work 'fixture.err')
@@ -110,6 +134,7 @@ try {
     Wait-Check { (Invoke-API '/version').version -eq $Version } 'isolated enrollment controller'
     Login 'fixture@example.test' $fixturePassword
     $server = Invoke-API '/servers/' 'POST' @{name='Windows smoke agent'; hostname='127.0.0.1'; deployment_type='manual'}
+    $script:diagnosticSecrets += $server.enrollment.agent_token
     $enrollmentPath = Join-Path $work 'agent.json'
     [IO.File]::WriteAllText($enrollmentPath, (ConvertTo-Json $server.enrollment -Compress))
     $agentOutput = & $agent install --assets-dir $assets --config-file $enrollmentPath 2>&1 | Out-String
@@ -120,10 +145,11 @@ try {
     if ($encrypted.Contains($server.enrollment.agent_token)) { throw 'Enrollment was stored in plaintext.' }
     Wait-Check {
         $states = Invoke-API '/configuration'
-        $state = $states | Where-Object server_id -eq $server.id
+        $state = @($states | ForEach-Object { $_ } | Where-Object server_id -eq $server.id)
         $online = (Invoke-API "/servers/$($server.id)/status").online
-        $online -and $state.status -eq 'applied' -and $state.desired_revision -eq $state.applied_revision
-    } 'agent authentication and applied readiness'
+        $script:readinessObservation = ConvertTo-Json @{online=$online; configuration=$state} -Compress -Depth 4
+        $online -and $state.Count -eq 1 -and $state[0].status -eq 'applied' -and $state[0].desired_revision -eq $state[0].applied_revision
+    } 'agent authentication and applied readiness' -OnTimeout { Write-AgentDiagnostics }
 
     $pemFixture = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../frontend/e2e/testdata/cert-fixture.ts'))
     $certPath, $privateKeyPath = (Join-Path $work 'cert.pem'), (Join-Path $work 'key.pem')

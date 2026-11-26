@@ -7,6 +7,9 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Report redacted agent, configuration and listener diagnostics when Windows
+  service qualification times out instead of hiding polling errors.
+
 - Keep text files, including PowerShell scripts, on LF across platforms to avoid
   Git line-ending conversion warnings on Windows.
 
