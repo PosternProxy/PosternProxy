@@ -157,9 +157,6 @@ func (s *ProxyHostService) Create(ctx context.Context, callerID *int64, input mo
 	}
 
 	// Push to Caddy — passthrough hosts trigger a full sync (L4 config restructure).
-	if err := s.pushOrSync(ctx, host); err != nil {
-		log.Error().Err(err).Int64("proxy_host_id", id).Msg("failed to apply proxy host to Caddy")
-	}
 
 	// Snapshot the newly created host so rollback can restore it.
 	if s.history != nil {
@@ -167,8 +164,8 @@ func (s *ProxyHostService) Create(ctx context.Context, callerID *int64, input mo
 			log.Warn().Err(err).Int64("proxy_host_id", id).Msg("failed to snapshot proxy host after create")
 		}
 	}
-	s.audit.Log(ctx, callerID, "create", "proxy_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "create", "proxy_host", id, nil, host, ip)
+	return host, syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64, input models.CreateProxyHostInput, ip string) (*models.ProxyHost, error) {
@@ -207,8 +204,12 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 		input.LBPolicy = "random"
 	}
 
+	if input.ServerID == 0 {
+		input.ServerID = existing.ServerID
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE proxy_hosts SET
+		  server_id=?,
 		  domain_names=?, forward_scheme=?, forward_host=?, forward_port=?,
 		  certificate_id=?, ssl_forced=?, hsts_enabled=?, hsts_subdomains=?,
 		  access_list_id=?, advanced_config=?, locations=?,
@@ -220,7 +221,7 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 		  extra_upstreams=?, lb_policy=?,
 		  updated_at=datetime('now')
 		WHERE id=?`,
-		string(input.DomainNames), input.ForwardScheme, input.ForwardHost, input.ForwardPort,
+		input.ServerID, string(input.DomainNames), input.ForwardScheme, input.ForwardHost, input.ForwardPort,
 		input.CertificateID, boolToInt(input.SSLForced), boolToInt(input.HSTSEnabled),
 		boolToInt(input.HSTSSubdomains),
 		input.AccessListID, input.AdvancedConfig, string(input.Locations),
@@ -237,13 +238,13 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 		return nil, fmt.Errorf("update proxy host: %w", err)
 	}
 
-	host, _ := s.GetByID(ctx, id)
-	if err := s.pushOrSync(ctx, host); err != nil {
-		log.Error().Err(err).Int64("proxy_host_id", id).Msg("failed to apply proxy host to Caddy")
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
 
-	s.audit.Log(ctx, callerID, "update", "proxy_host", &id, map[string]any{"domains": string(input.DomainNames)}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "update", "proxy_host", id, existing, host, ip)
+	return host, syncServers(ctx, s.sync, existing.ServerID, host.ServerID)
 }
 
 func (s *ProxyHostService) Delete(ctx context.Context, callerID *int64, id int64, ip string) error {
@@ -262,26 +263,19 @@ func (s *ProxyHostService) Delete(ctx context.Context, callerID *int64, id int64
 		return fmt.Errorf("delete proxy host: %w", err)
 	}
 
-	// Remove from Caddy. Hosts that need a full resync (remote, passthrough, or
-	// dual-listener non-SSL-forced hosts) rebuild from the post-delete DB state;
-	// a simple local SSL-forced host has a single route we can drop by @id.
-	if needsFullResync(host) {
-		if s.sync != nil {
-			if err := s.sync.SyncServer(ctx, host.ServerID); err != nil {
-				log.Warn().Err(err).Int64("server_id", host.ServerID).Int64("proxy_host_id", id).Msg("failed to sync server after deleting proxy host")
-			}
-		}
-	} else if host.CaddyID != "" {
-		if err := s.caddy.DeletePath("id/" + host.CaddyID); err != nil {
-			log.Warn().Err(err).Int64("proxy_host_id", id).Msg("failed to remove proxy host from Caddy")
-		}
-	}
-
-	s.audit.Log(ctx, callerID, "delete", "proxy_host", &id, nil, ip)
-	return nil
+	s.audit.HostChange(ctx, callerID, "delete", "proxy_host", id, host, nil, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *ProxyHostService) SetEnabled(ctx context.Context, callerID *int64, id int64, enabled bool, ip string) error {
+	before, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if before == nil {
+		return fmt.Errorf("host not found")
+	}
+
 	if _, err := s.db.ExecContext(ctx,
 		"UPDATE proxy_hosts SET enabled=?, updated_at=datetime('now') WHERE id=?",
 		boolToInt(enabled), id,
@@ -289,78 +283,20 @@ func (s *ProxyHostService) SetEnabled(ctx context.Context, callerID *int64, id i
 		return fmt.Errorf("update enabled: %w", err)
 	}
 
-	host, _ := s.GetByID(ctx, id)
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if host == nil {
 		return fmt.Errorf("proxy host not found")
-	}
-
-	if enabled {
-		if err := s.pushOrSync(ctx, host); err != nil {
-			log.Error().Err(err).Int64("proxy_host_id", id).Msg("failed to enable proxy host in Caddy")
-		}
-	} else {
-		// A full resync rebuilds from enabled rows, omitting the now-disabled
-		// host; a simple local SSL-forced host has a single route to drop by @id.
-		if needsFullResync(host) {
-			if s.sync != nil {
-				if err := s.sync.SyncServer(ctx, host.ServerID); err != nil {
-					log.Warn().Err(err).Int64("server_id", host.ServerID).Int64("proxy_host_id", id).Msg("failed to sync server after disabling proxy host")
-				}
-			}
-		} else if host.CaddyID != "" {
-			if err := s.caddy.DeletePath("id/" + host.CaddyID); err != nil {
-				log.Warn().Err(err).Int64("proxy_host_id", id).Msg("failed to disable proxy host in Caddy")
-			}
-		}
 	}
 
 	action := "enable"
 	if !enabled {
 		action = "disable"
 	}
-	s.audit.Log(ctx, callerID, action, "proxy_host", &id, nil, ip)
-	return nil
-}
-
-// needsFullResync reports whether a host change can't be expressed as a single
-// incremental route patch and so requires rebuilding and pushing the whole
-// config. Proxy-host changes affect server-level error routes as well as the
-// host route itself, so a full sync keeps the Caddy config coherent.
-func needsFullResync(_ *models.ProxyHost) bool {
-	return true
-}
-
-// pushOrSync pushes a proxy host change to Caddy. Hosts that need a full resync
-// (see needsFullResync) rebuild the entire config; the incremental path is kept
-// as a fallback for callers that may bypass needsFullResync in the future.
-func (s *ProxyHostService) pushOrSync(ctx context.Context, h *models.ProxyHost) error {
-	if needsFullResync(h) {
-		if s.sync != nil {
-			return s.sync.SyncServer(ctx, h.ServerID)
-		}
-		// sync not yet wired (startup construction order) — best effort
-		return nil
-	}
-	return s.pushToCaddy(ctx, h)
-}
-
-// pushToCaddy pushes a single proxy host route to the running Caddy instance,
-// falling back to a full resync if the base config structure is missing.
-func (s *ProxyHostService) pushToCaddy(ctx context.Context, h *models.ProxyHost) error {
-	if s.sync == nil {
-		return nil
-	}
-	return s.sync.applyLocalOrResync(ctx, func() error {
-		route, err := caddy.BuildProxyHostRoute(h, nil)
-		if err != nil {
-			return fmt.Errorf("build route: %w", err)
-		}
-		// Try to update an existing route by @id; if it doesn't exist yet, append it.
-		if patchErr := s.caddy.PatchPath("apps/http/servers/https/routes/id/"+h.CaddyID, route); patchErr == nil {
-			return nil
-		}
-		return s.caddy.AppendToArray("apps/http/servers/https/routes", route)
-	})
+	s.audit.HostChange(ctx, callerID, action, "proxy_host", id, before, host, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 // --- scan helpers ---

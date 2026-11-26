@@ -6,54 +6,86 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/posternproxy/posternproxy/internal/agent"
+	"github.com/posternproxy/posternproxy/internal/agentconfig"
 	"github.com/posternproxy/posternproxy/internal/buildinfo"
-	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/posternproxy/posternproxy/internal/portforward"
+	"github.com/posternproxy/posternproxy/internal/certstore"
+	"github.com/posternproxy/posternproxy/internal/platformservice"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
 // Falls back to VCS info from the Go module build stamp, or "dev".
-var Version = buildinfo.Version()
+var Version = "dev"
 
 func main() {
+	if Version == "dev" {
+		Version = buildinfo.Version()
+	}
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		buildinfo.WriteVersion(os.Stdout, "posternproxy-agent", Version)
+		return
+	}
+	if handled, err := platformservice.Dispatch(os.Args[1:], "posternproxy-agent", runAgent); handled {
+		if err != nil {
+			log.Fatal().Err(err).Msg("Windows service operation failed")
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "install" {
+		runInstall(os.Args[2:])
+		return
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := runAgent(ctx); err != nil {
+		log.Fatal().Err(err).Msg("agent stopped")
+	}
+}
 
-	controllerURL := mustEnv("POSTERNPROXY_CONTROLLER_URL") // wss://host:81
-	token := mustEnv("POSTERNPROXY_AGENT_TOKEN")
-	serverIDStr := mustEnv("POSTERNPROXY_SERVER_ID")
+func runAgent(ctx context.Context) error {
+	controllerURL := os.Getenv("POSTERNPROXY_CONTROLLER_URL")
+	token := os.Getenv("POSTERNPROXY_AGENT_TOKEN")
+	serverIDStr := os.Getenv("POSTERNPROXY_SERVER_ID")
 	caddyAPI := envOr("POSTERNPROXY_CADDY_API", "http://localhost:2019")
 
 	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
 	if err != nil {
-		log.Fatal().Err(err).Msg("invalid POSTERNPROXY_SERVER_ID")
+		return fmt.Errorf("invalid POSTERNPROXY_SERVER_ID")
+	}
+	if err := (agentconfig.Config{ControllerURL: controllerURL, Token: token, ServerID: serverID}).Validate(); err != nil {
+		return err
 	}
 
 	log.Info().Str("version", Version).Int64("server_id", serverID).Msg("starting posternproxy-agent")
 
 	a := &agentClient{
+		ctx:           ctx,
 		controllerURL: controllerURL,
 		token:         token,
 		serverID:      serverID,
 		caddyAPI:      caddyAPI,
 		startedAt:     time.Now(),
 	}
-	a.run()
+	a.run(ctx)
+	return nil
 }
 
 // caddyHTTPClient is used for all Caddy admin API calls. The timeout
@@ -61,6 +93,7 @@ func main() {
 var caddyHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type agentClient struct {
+	ctx           context.Context
 	controllerURL string
 	token         string
 	serverID      int64
@@ -69,11 +102,11 @@ type agentClient struct {
 }
 
 // run connects with exponential back-off and loops forever.
-func (a *agentClient) run() {
+func (a *agentClient) run(ctx context.Context) {
 	backoff := time.Second
-	for {
+	for ctx.Err() == nil {
 		connectedAt := time.Now()
-		if err := a.connect(); err != nil {
+		if err := a.connect(ctx); err != nil && ctx.Err() == nil {
 			log.Warn().Err(err).Dur("retry_in", backoff).Msg("agent disconnected")
 		}
 		// Reset backoff if the connection lasted long enough to be useful
@@ -81,7 +114,11 @@ func (a *agentClient) run() {
 		if time.Since(connectedAt) > 60*time.Second {
 			backoff = time.Second
 		}
-		time.Sleep(backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 		if backoff < 60*time.Second {
 			backoff *= 2
 		}
@@ -89,10 +126,10 @@ func (a *agentClient) run() {
 }
 
 // connect opens one WebSocket session and processes messages until the connection drops.
-func (a *agentClient) connect() error {
+func (a *agentClient) connect(ctx context.Context) error {
 	u, err := url.Parse(a.controllerURL)
 	if err != nil {
-		return fmt.Errorf("parse controller URL: %w", err)
+		return fmt.Errorf("invalid controller URL")
 	}
 
 	// Convert http(s) to ws(s) if caller gave an HTTP URL.
@@ -102,24 +139,26 @@ func (a *agentClient) connect() error {
 	case "https":
 		u.Scheme = "wss"
 	}
+	if u.User != nil || u.Host == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return fmt.Errorf("invalid controller URL")
+	}
 	u.Path = "/ws/agent"
-	q := u.Query()
+	u.RawPath = ""
+	u.Fragment = ""
+	q := url.Values{}
 	q.Set("server_id", strconv.FormatInt(a.serverID, 10))
-	q.Set("token", a.token)
 	u.RawQuery = q.Encode()
 
-	// Redact the token before logging the connection URL.
-	logURL := *u
-	redactedQ := logURL.Query()
-	redactedQ.Set("token", "REDACTED")
-	logURL.RawQuery = redactedQ.Encode()
-	log.Info().Str("url", logURL.String()).Msg("connecting to controller")
+	log.Info().Str("controller_host", u.Host).Msg("connecting to controller")
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), http.Header{"Authorization": {"Bearer " + a.token}})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopClosing()
+	conn.SetReadLimit(64 << 20)
 	log.Info().Msg("connected")
 
 	// Send initial status report.
@@ -138,12 +177,18 @@ func (a *agentClient) connect() error {
 				errCh <- err
 				return
 			}
-			readCh <- msg
+			select {
+			case readCh <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return nil
 		case msg := <-readCh:
 			a.handleMessage(conn, msg)
 		case <-ticker.C:
@@ -162,17 +207,29 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 	case agent.KindConfigFullSync:
 		var p agent.ConfigFullSyncPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			if len(p.Certs) > 0 {
-				if err := writeCerts(p.Certs); err != nil {
-					log.Error().Err(err).Msg("failed to write cert files")
-					errMsg = err.Error()
-					break
-				}
+			material := make([]certstore.Material, 0, len(p.Certs))
+			for _, cert := range p.Certs {
+				material = append(material, certstore.Material{ID: cert.CertID, Pair: certstore.Pair{Certificate: cert.CertPEM, Key: cert.KeyPEM}})
 			}
-			if err := a.caddyLoad(p.Config); err != nil {
+			root := envOr("POSTERNPROXY_CERT_RUNTIME_DIR", "/run/posternproxy-agent-certs")
+			config, keep, err := certstore.StageConfig(p.Config, material, root)
+			if err != nil {
+				errMsg = "Certificate staging failed"
+				log.Error().Err(err).Msg("stage required certificates")
+				break
+			}
+			if err := a.caddyLoad(config); err != nil {
 				errMsg = err.Error()
 			} else {
-				success = true
+				if err := certstore.PruneRuntime(root, keep); err != nil {
+					errMsg = "Certificate retirement failed"
+					log.Error().Err(err).Msg("retire inactive certificates")
+				} else if err := certstore.PruneLegacy(envOr("POSTERNPROXY_CERT_DIR", "/var/lib/posternproxy-agent/certs")); err != nil {
+					errMsg = "Legacy certificate cleanup failed"
+					log.Error().Err(err).Msg("remove legacy certificate copies")
+				} else {
+					success = true
+				}
 			}
 		}
 
@@ -196,25 +253,6 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 			}
 		}
 
-	case agent.KindPortForwardApply:
-		var p agent.PortForwardPayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			pf := payloadToPortForward(p)
-			if err := portforward.ApplyRule(&pf); err != nil {
-				errMsg = err.Error()
-			} else {
-				success = true
-			}
-		}
-
-	case agent.KindPortForwardRemove:
-		var p agent.PortForwardPayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			pf := payloadToPortForward(p)
-			portforward.RemoveRule(&pf)
-			success = true
-		}
-
 	case agent.KindHealthCheck:
 		a.sendStatus(conn)
 		return
@@ -225,10 +263,15 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 	}
 
 	result, _ := agent.NewMessage(agent.KindCommandResult, agent.CommandResultPayload{
+		CommandID:   msg.ID,
+		Revision:    msg.Revision,
 		CommandKind: msg.Kind,
 		Success:     success,
 		Error:       errMsg,
 	})
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return
+	}
 	if err := conn.WriteJSON(result); err != nil {
 		log.Warn().Err(err).Str("kind", msg.Kind).Msg("write command result")
 	}
@@ -243,6 +286,9 @@ func (a *agentClient) sendStatus(conn *websocket.Conn) {
 		CaddyVersion: version,
 		ActiveRoutes: routes,
 	})
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return
+	}
 	if err := conn.WriteJSON(msg); err != nil {
 		log.Warn().Err(err).Msg("write status")
 	}
@@ -250,7 +296,7 @@ func (a *agentClient) sendStatus(conn *websocket.Conn) {
 
 // queryCaddyVersion reads the Server response header from the Caddy admin API.
 func (a *agentClient) queryCaddyVersion() string {
-	resp, err := caddyHTTPClient.Get(a.caddyAPI + "/config/")
+	resp, err := a.caddyGet("/config/")
 	if err != nil {
 		return ""
 	}
@@ -264,7 +310,7 @@ func (a *agentClient) queryCaddyVersion() string {
 
 // queryCaddyRouteCount returns total HTTP routes across all Caddy servers.
 func (a *agentClient) queryCaddyRouteCount() int {
-	resp, err := caddyHTTPClient.Get(a.caddyAPI + "/config/apps/http/servers/")
+	resp, err := a.caddyGet("/config/apps/http/servers/")
 	if err != nil {
 		return 0
 	}
@@ -304,7 +350,7 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 	if body != nil {
 		r = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, a.caddyAPI+path, r)
+	req, err := http.NewRequestWithContext(a.requestContext(), method, a.caddyAPI+path, r)
 	if err != nil {
 		return err
 	}
@@ -323,47 +369,22 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 	return nil
 }
 
+func (a *agentClient) requestContext() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
+
+func (a *agentClient) caddyGet(path string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(a.requestContext(), http.MethodGet, a.caddyAPI+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return caddyHTTPClient.Do(request)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-func payloadToPortForward(p agent.PortForwardPayload) models.PortForward {
-	return models.PortForward{
-		ID:           p.ID,
-		Protocol:     p.Protocol,
-		IncomingPort: p.IncomingPort,
-		ForwardHost:  p.ForwardHost,
-		ForwardPort:  p.ForwardPort,
-		Interface:    p.Interface,
-		Method:       p.Method,
-	}
-}
-
-// writeCerts writes custom certificate files to the agent's cert directory so
-// they are available on disk before the Caddy config that references them loads.
-func writeCerts(certs []agent.CertFile) error {
-	certDir := envOr("POSTERNPROXY_CERT_DIR", "/var/lib/posternproxy-agent/certs")
-	for _, c := range certs {
-		dir := filepath.Join(certDir, strconv.FormatInt(c.CertID, 10))
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return fmt.Errorf("create cert dir %s: %w", dir, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "cert.pem"), c.CertPEM, 0600); err != nil {
-			return fmt.Errorf("write cert %d: %w", c.CertID, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "key.pem"), c.KeyPEM, 0600); err != nil {
-			return fmt.Errorf("write key %d: %w", c.CertID, err)
-		}
-		log.Debug().Int64("cert_id", c.CertID).Str("dir", dir).Msg("cert files written")
-	}
-	return nil
-}
-
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Fatal().Str("env", key).Msg("required environment variable not set")
-	}
-	return v
-}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

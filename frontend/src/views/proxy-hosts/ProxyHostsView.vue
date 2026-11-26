@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import type { ProxyHost, AccessList, Certificate, UpstreamHealth, TLSProbeStatus } from '@/types'
+import type { ProxyHost, AccessList, Certificate, UpstreamHealth } from '@/types'
 import {
   listProxyHosts,
   deleteProxyHost,
@@ -10,10 +10,12 @@ import {
 } from '@/api/proxyHosts'
 import { listAccessLists } from '@/api/accessLists'
 import { listCertificates } from '@/api/certificates'
-import { getUpstreamHealth, getTLSStatus } from '@/api/health'
+import { getUpstreamHealth } from '@/api/health'
 import { useServerStore } from '@/stores/servers'
 import { useServerContext } from '@/stores/serverContext'
 import ConfigHistoryModal from '@/components/ConfigHistoryModal.vue'
+import TLSStatusBadge from '@/components/TLSStatusBadge.vue'
+import { useTLSStatus } from '@/composables/useTLSStatus'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 import { useResourceList } from '@/composables/useResourceList'
 import ProxyHostFormModal from './ProxyHostFormModal.vue'
@@ -77,15 +79,7 @@ const healthMap = computed(() => {
   return m
 })
 
-const tlsStatuses = ref<TLSProbeStatus[]>([])
-
-const tlsMap = computed(() => {
-  const m = new Map<number, TLSProbeStatus>()
-  for (const t of tlsStatuses.value) {
-    m.set(t.host_id, t)
-  }
-  return m
-})
+const { tlsFor, tlsError } = useTLSStatus('proxy_host')
 
 async function fetchHealth() {
   try {
@@ -93,26 +87,6 @@ async function fetchHealth() {
   } catch {
     /* non-fatal — Caddy might not be running */
   }
-}
-
-async function fetchTLS() {
-  try {
-    tlsStatuses.value = await getTLSStatus()
-  } catch {
-    /* non-fatal — Caddy might not be running */
-  }
-}
-
-function tlsFor(host: ProxyHost): TLSProbeStatus | undefined {
-  return tlsMap.value.get(host.id)
-}
-
-function tlsLabel(host: ProxyHost): string {
-  const t = tlsFor(host)
-  if (!t) return ''
-  if (t.status === 'valid') return 'TLS OK'
-  if (t.status === 'pending') return 'TLS pending'
-  return 'TLS failed'
 }
 
 function upstreamFor(host: ProxyHost): UpstreamHealth {
@@ -138,20 +112,13 @@ function upstreamLabel(host: ProxyHost): string {
 
 onMounted(async () => {
   await serverStore.ensureLoaded()
-  await Promise.all([
-    fetchHosts(),
-    fetchAccessLists(),
-    fetchCertificates(),
-    fetchHealth(),
-    fetchTLS(),
-  ])
+  await Promise.all([fetchHosts(), fetchAccessLists(), fetchCertificates(), fetchHealth()])
   if (route.query.create === '1') {
     openCreate()
     await router.replace({ name: 'proxy-hosts' })
   }
   healthTimer = setInterval(() => {
     fetchHealth()
-    fetchTLS()
   }, 30_000)
 })
 
@@ -320,8 +287,7 @@ function openHistory(host: ProxyHost) {
                   <span
                     class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
                     :class="{
-                      'bg-emerald-100 text-emerald-700':
-                        upstreamFor(host).status === 'healthy',
+                      'bg-emerald-100 text-emerald-700': upstreamFor(host).status === 'healthy',
                       'bg-red-100 text-red-700': upstreamFor(host).status === 'unhealthy',
                       'bg-slate-100 text-slate-600': upstreamFor(host).status === 'unknown',
                     }"
@@ -388,28 +354,18 @@ function openHistory(host: ProxyHost) {
                 >Auto</span
               >
 
-              <!-- Live TLS certificate status (probe of Caddy's :443 listener) -->
-              <div v-if="tlsFor(host)" class="mt-1">
-                <span
-                  class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
-                  :class="{
-                    'bg-emerald-100 text-emerald-700': tlsFor(host)!.status === 'valid',
-                    'bg-amber-100 text-amber-700': tlsFor(host)!.status === 'pending',
-                    'bg-red-100 text-red-700': tlsFor(host)!.status === 'failed',
-                  }"
-                  :title="tlsFor(host)!.detail || ''"
-                >
-                  <span
-                    class="h-1.5 w-1.5 rounded-full"
-                    :class="{
-                      'bg-emerald-500': tlsFor(host)!.status === 'valid',
-                      'bg-amber-400 animate-pulse': tlsFor(host)!.status === 'pending',
-                      'bg-red-500 animate-pulse': tlsFor(host)!.status === 'failed',
-                    }"
-                  />
-                  {{ tlsLabel(host) }}
-                </span>
-              </div>
+              <TLSStatusBadge
+                :status="tlsFor(host.id)"
+                :server-id="host.server_id"
+                :enabled="host.enabled"
+                :https="
+                  !host.http_only &&
+                  !host.tls_passthrough &&
+                  (host.ssl_forced || !!host.certificate_id)
+                "
+                :load-error="tlsError"
+                v-if="!host.tls_passthrough"
+              />
             </td>
 
             <!-- Status toggle -->

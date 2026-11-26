@@ -13,7 +13,6 @@ By default, a proxy host forwards all paths to the same upstream. Locations allo
 
 - Send `/api/*` to a different backend than `/`
 - Apply different `forward_scheme` per path
-- Set path-specific Caddy directives using **Advanced Config**
 
 ## Adding a location
 
@@ -25,7 +24,6 @@ Click **+ Add Location** on the Locations tab. Each location has:
 | **Forward Scheme** | `http` or `https` for this path |
 | **Forward Host** | Upstream host for this path |
 | **Port** | Upstream port for this path |
-| **Advanced Config** | Raw Caddy JSON directives merged into this location's subroute |
 
 <!-- TODO: Screenshot — Locations tab with two locations (/api to port 4000, / to port 3000) -->
 
@@ -35,29 +33,26 @@ Paths are matched as prefixes. A location with path `/api` will match:
 - `/api`
 - `/api/users`
 - `/api/v2/orders`
+- `/apix` (matching is a raw prefix, not a path-segment boundary)
 
-More specific paths take priority. If you have both `/api` and `/api/admin`, requests to `/api/admin/users` will use the `/api/admin` location.
+Locations retain their saved order; there is no automatic specificity sort.
+Place `/api/admin` before `/api` if it must take priority. The path is forwarded
+unchanged; the prefix is not stripped.
 
 ## Order of evaluation
 
 Locations are evaluated before the default proxy host route. The first matching location wins. The default upstream (from the Details tab) is used for any request that does not match a location.
 
-## Advanced Config per location
+## Advanced configuration
 
-The **Advanced Config** field on each location accepts raw Caddy JSON that is merged into the subroute for that path. This is the same mechanism as the [Advanced Config]({{< relref "/proxy-hosts" >}}) on the main proxy host, but scoped to a single path.
-
-Use this for path-specific directives such as:
-
-```json
-{
-  "rewrite": {
-    "strip_path_prefix": "/api"
-  }
-}
-```
+The location form currently exposes only path, scheme, host, and port. Although
+the model has an `advanced_config` field, the location route builder does not
+apply it. Use the host-level Advanced tab only when you can supply valid Caddy
+route JSON and verify its resulting configuration.
 
 ## Notes
 
 - Locations are stored as a JSON array in the database alongside the proxy host record.
-- Changing locations triggers an immediate Caddy config update — no service restart required.
+- Changing locations saves desired configuration and requests application; no
+  service restart is normally required. Verify the configuration notice.
 - A proxy host with no locations has a single Caddy subroute covering all paths.

@@ -63,9 +63,9 @@ func (h *ConfigHistoryHandler) Rollback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.history.Rollback(r.Context(), callerID, historyID, r.RemoteAddr); err != nil {
-		http.Error(w, "rollback failed: "+err.Error(), http.StatusInternalServerError)
+		respondServiceError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "rolled back"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }

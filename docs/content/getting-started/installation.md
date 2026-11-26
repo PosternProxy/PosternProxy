@@ -5,7 +5,11 @@ weight: 1
 
 # Installation
 
-PosternProxy installs directly on Debian 11/12 or Ubuntu 22.04/24.04. No Docker required.
+Native installation uses systemd on Debian/Ubuntu or
+[Windows services]({{< relref "/getting-started/windows" >}}), and
+[Docker images]({{< relref "/getting-started/docker" >}}) are published for
+amd64/arm64. Release targets are native Linux amd64 and arm64, Windows amd64,
+and Docker amd64/arm64.
 
 ## Prerequisites
 
@@ -15,73 +19,142 @@ PosternProxy installs directly on Debian 11/12 or Ubuntu 22.04/24.04. No Docker 
 
 ## Automated install
 
-The install script handles everything: installing the bundled Caddy, creating system users, configuring systemd, UFW, fail2ban, and unattended-upgrades.
+The controller includes its own installer. It can use the Caddy and agent from
+a supplied archive, or download them when installing an individual published
+controller binary. The build must contain the `install` subcommand; older
+releases do not gain the command automatically.
 
-**Step 1 — Download the release binaries**
+### Install from a bundle (`.tar.gz`)
 
-Download the latest release from the
-[GitHub releases page](https://github.com/PosternProxy/PosternProxy/releases/).
-Each release provides three binaries for your server's architecture (`amd64` for
-most servers, `arm64` for ARM):
+{{% hint info %}}
+**Which architecture?**
+Both native Linux architectures have release bundles. Use
+`posternproxy-linux-amd64.tar.gz` on x86-64 servers or
+`posternproxy-linux-arm64.tar.gz` on ARM64 servers. Run `uname -m` if unsure:
+`x86_64` means amd64; `aarch64` means arm64. The commands below use amd64.
+{{% /hint %}}
 
-| Binary | Purpose |
+Copy the matching bundle to your server.
+Extract it in a dedicated directory and install:
+
+```bash
+mkdir -p posternproxy-install
+tar -xzf posternproxy-linux-amd64.tar.gz -C posternproxy-install
+cd posternproxy-install
+chmod +x posternproxy
+sudo ./posternproxy install --assets-dir .
+```
+
+The archive contains these four files:
+
+| File | Purpose |
 |---|---|
-| `posternproxy` | The controller (management UI + API) |
-| `posternproxy-agent` | The remote agent — required to manage remote servers |
-| `caddy` | A custom Caddy build with the L4 and rate-limit plugins |
+| `posternproxy` | Controller with the built-in installer |
+| `posternproxy-agent` | Matching remote agent |
+| `caddy` | Caddy with the required plugins |
+| `checksums.txt` | SHA-256 checksums for the binaries |
 
-The installer looks for the binaries named exactly `posternproxy`,
-`posternproxy-agent`, and `caddy`. If the release assets carry a platform suffix
-(e.g. `posternproxy-linux-amd64`), rename them to the bare names above.
+The extracted executable is named **`posternproxy`**, not
+`posternproxy-linux-amd64` or `posternproxy-linux-arm64`. Keep `--assets-dir .` in the command: it uses the
+extracted assets and works with unreleased source builds that have no matching
+published release. No additional binary downloads occur; OS packages still use APT.
 
-{{< hint info >}}
+The installer also places the included agent at
+`/usr/local/bin/posternproxy-agent` for uploading to remote nodes. It does not
+start an agent service on the controller. Remote nodes need this agent and Caddy
+for their architecture; see [Provisioning]({{< relref "/multi-server/provisioning" >}})
+for the separate remote setup and its current beta limitations.
+
+{{% hint info %}}
 **Prefer to build it yourself?**
 See [Building from source]({{< relref "/getting-started/building-from-source" >}})
 for building the binaries on Linux or Windows.
-{{< /hint >}}
+{{% /hint %}}
 
-**Step 2 — Copy the binaries and the install script to the server**
+### Install an individual release binary
 
-Put the three binaries and `install.sh` in one directory — the installer finds the
-binaries in the directory it runs from. The install script ships with the release;
-it is also available at `scripts/install.sh` in the repository.
-
-```bash
-ssh root@your-server 'mkdir -p /tmp/posternproxy'
-scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
-```
-
-Notes:
-- The `caddy` binary is the custom build from Step 1. Shipping it means the
-  installer skips compiling Caddy on the server, so **no Go toolchain is
-  installed on production**. If you omit it, the installer falls back to
-  building Caddy from source (and installs Go to do so).
-- The `posternproxy-agent` binary is optional for a controller-only install, but
-  it is required for provisioning remote nodes — copy it now to avoid a second trip.
-
-**Step 3 — Run the install script**
+If you downloaded an individual controller instead of an archive from the
+[GitHub releases page](https://github.com/PosternProxy/PosternProxy/releases/),
+choose `posternproxy-linux-amd64` or `posternproxy-linux-arm64` for your server.
+Verify against `checksums.txt`, then rename it to the
+same command name used in the examples:
 
 ```bash
-ssh root@your-server
-bash /tmp/posternproxy/install.sh
+mv posternproxy-linux-amd64 posternproxy
+chmod +x posternproxy
+sudo ./posternproxy install
 ```
 
-The script will:
+Use the `arm64` filename in the rename command on ARM servers. This path downloads
+Caddy and the agent from the controller's exact release tag over HTTPS. The
+matching assets and checksum manifest must already be published; use the bundle
+path above for the supplied unreleased build.
 
-1. Install the custom Caddy binary you shipped (or, if none was shipped, install Go and build Caddy with the L4 and rate-limit plugins on the server)
-2. Create `caddy` and `posternproxy` system users (no login shell)
-3. Generate a random JWT secret and write `/etc/posternproxy/config.env`
-4. Install hardened systemd services for both Caddy and PosternProxy
-5. Apply sysctl hardening (IP forwarding, rp_filter, TCP SYN cookies)
-6. Configure UFW (allow ports 80, 443, 81)
-7. Install and configure fail2ban with a PosternProxy login-failure jail
-8. Enable unattended security upgrades
-9. Optionally harden SSH (disable root login, enforce key-only auth)
+### What installation does
 
-{{< hint warning >}}
-**SSH hardening prompt**
-The installer asks whether to harden SSH. If you choose yes, ensure your SSH key is in `~/.ssh/authorized_keys` before logging out — password auth will be disabled.
-{{< /hint >}}
+1. Stages bundled assets, or downloads the matching published assets.
+2. Checks SHA-256 checksums, Linux architecture, and Caddy's pinned version/plugins before changing the system.
+3. Installs OS packages, dedicated users, protected configuration, and hardened systemd services.
+4. Applies sysctl hardening and configures fail2ban and unattended security updates.
+5. Starts Caddy and the controller, then waits for running services and reachable local APIs.
+
+No Go compiler, repository checkout, install script, or `caddy-build.sh` is needed
+on the server. Download failures and checksum/plugin mismatches stop installation.
+Checksums verify artifact integrity against the release manifest; they are not
+independent release signatures.
+
+### Options and reruns
+
+```bash
+./posternproxy install --help
+
+# Use a different management port with the extracted bundle:
+sudo ./posternproxy install --assets-dir . --port 8081
+
+# Add firewall rules, allowing the actual SSH port before enabling UFW:
+sudo ./posternproxy install --assets-dir . --configure-firewall --ssh-port 2222
+```
+
+For an individual published controller using automatic downloads, omit
+`--assets-dir .`.
+
+Firewall setup is opt-in. It adds SSH, HTTP, HTTPS (TCP/UDP), and the management
+port without resetting existing rules or changing default policies. Without the
+flag, open the required ports yourself in the host and cloud firewalls. SSH
+configuration is never modified.
+
+Reruns preserve `/etc/posternproxy/config.env`, secrets, data, and existing
+hardening configuration. `--port` applies only when creating a new configuration.
+Managed service units and binaries are replaced and services restart. For an
+existing installation, follow [Beta upgrades and recovery]({{< relref
+"/administration/upgrading" >}}) first; configuration preservation does not
+qualify an older database for upgrade.
+
+Existing storage paths outside `/var/lib/posternproxy` (or explicitly configured
+relative storage paths) are rejected before installation changes. Such deployments
+need a deliberate storage migration or their existing custom service setup; the
+installer does not replace a custom layout with incompatible sandbox permissions.
+
+Development builds need `--assets-dir` or an explicit `--release vX.Y.Z` selecting
+compatible published assets. There is no automatic fallback to the latest release.
+
+### Local assets and offline installation
+
+Source builds produce `posternproxy`, `posternproxy-agent`, `caddy`, and
+`checksums.txt`. Copy these four files together and run:
+
+```bash
+chmod +x posternproxy
+sudo ./posternproxy install --assets-dir .
+```
+
+Release assets with platform suffixes are also accepted in this directory.
+Use binaries and checksums from the same build. The local files are copied into
+private staging and checked before installation. No release downloads occur with
+`--assets-dir`; OS packages still come from APT. For a disconnected host, preinstall
+`ca-certificates`, `fail2ban`, `iptables`, `unattended-upgrades`, and `apt-listchanges` (plus
+`ufw` if requested), then add `--skip-packages`. A running systemd host and Bash
+for the embedded Caddy verifier are required.
 
 ## Post-install
 
@@ -91,34 +164,30 @@ Once complete, the UI is available at:
 http://<your-server-ip>:81
 ```
 
-On first boot, PosternProxy creates an admin account and **prints a generated password to stderr**, which the systemd service writes to its log file (not the journal). Check it immediately after startup:
+On a fresh installation, `posternproxy install` prints the initial administrator
+email and password directly in your terminal after the services pass readiness:
 
-```bash
-grep -A6 "INITIAL SETUP" /var/log/posternproxy/posternproxy.log
+```text
+Initial administrator login
+Email: admin@posternproxy.local
+Password: <generated password>
+Change this password after your first login.
 ```
 
-The banner looks like:
+The installer uses a private temporary file under `/run` for the first service
+start, then removes it. The generated password is not saved in the persistent
+service configuration or printed in service logs. Reinstalling an existing
+database preserves its credentials and does not display or reset its password.
 
-```
-╔══════════════════════════════════════════════════════╗
-║           POSTERNPROXY — INITIAL SETUP               ║
-╟──────────────────────────────────────────────────────╢
-║  Email:    admin@posternproxy.local                  ║
-║  Password: <random 20-character password>            ║
-╟──────────────────────────────────────────────────────╢
-║  Change this password immediately after first login. ║
-║  Set POSTERNPROXY_ADMIN_PASSWORD to silence this.    ║
-╚══════════════════════════════════════════════════════╝
-```
+Log in with the displayed credentials, then change the password. Direct runs and
+containers still use the startup banner when no initial password is configured.
 
-Log in with the email and generated password shown, then change it immediately.
-
-{{< hint info >}}
+{{% hint info %}}
 **Setting a fixed admin password**
 Set `POSTERNPROXY_ADMIN_PASSWORD` in `/etc/posternproxy/config.env` before the first boot to use a specific password instead of a generated one.
-{{< /hint >}}
+{{% /hint %}}
 
-{{< hint warning >}}
+{{% hint warning %}}
 **Lost the generated password?**
 If you missed the banner, use the `reset-password` subcommand to recover access without running the server. Run it as the `posternproxy` user with the config loaded, so it uses the correct database path and does not create root-owned database files:
 
@@ -130,7 +199,7 @@ sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; \
 ```
 
 A new random password is printed to the terminal.
-{{< /hint >}}
+{{% /hint %}}
 
 ## Environment variables
 
@@ -138,15 +207,22 @@ PosternProxy is configured via `/etc/posternproxy/config.env`. All variables are
 
 | Variable | Default | Description |
 |---|---|---|
-| `POSTERNPROXY_LISTEN_ADDR` | `:81` | Management UI listen address |
-| `POSTERNPROXY_DB_PATH` | `/var/lib/posternproxy/posternproxy.db` | SQLite database path |
-| `POSTERNPROXY_JWT_SECRET` | *(persisted in `<DataDir>/secret.key`)* | Secret for signing JWT tokens and encrypting SSH credentials — stable across restarts |
+| `POSTERNPROXY_LISTEN` | `:81` | Management UI listen address |
+| `POSTERNPROXY_DATA_DIR` | `data` | Data directory; the installer sets `/var/lib/posternproxy` |
+| `POSTERNPROXY_LOG_FORMAT` | Console | Set `json` for structured logs; the installed service uses JSON for fail2ban |
+| `POSTERNPROXY_DB_PATH` | `data/posternproxy.db` | SQLite path; the installer sets `/var/lib/posternproxy/posternproxy.db` |
+| `POSTERNPROXY_JWT_SECRET` | *(persisted in `<DataDir>/secret.key`)* | Secret for signing JWT tokens and encrypting SSH credentials and custom certificates — stable across restarts |
 | `POSTERNPROXY_CADDY_API` | `http://localhost:2019` | Caddy admin API URL |
-| `POSTERNPROXY_CERT_DIR` | `/var/lib/posternproxy/certs` | Custom certificate storage |
-| `POSTERNPROXY_CONTROLLER_URL` | `http://<host-ip>:81` | URL agents use to connect |
-| `POSTERNPROXY_AGENT_BIN_PATH` | `/usr/local/bin/posternproxy-agent` | Agent binary for provisioning |
+| `POSTERNPROXY_CERT_DIR` | `data/certs` | Custom certificate storage; the installer sets `/var/lib/posternproxy/certs` |
+| `POSTERNPROXY_CERT_RUNTIME_DIR` | `data/caddy-certs` | Group-restricted runtime PEM; native install uses `/run/posternproxy-certs` |
+| `POSTERNPROXY_CADDY_BIN` | `/usr/bin/caddy` | Pinned Caddy artifact for SSH provisioning |
+| `POSTERNPROXY_CONTROLLER_URL` | Empty | Public URL agents use to connect; configure for remote-node provisioning |
+| `POSTERNPROXY_TRUSTED_PROXIES` | Empty | Comma-separated proxy CIDRs trusted to supply `X-Forwarded-For`. See [Security Hardening]({{< relref "/administration/security-hardening" >}}). |
+| `POSTERNPROXY_CADDY_TRUSTED_PROXIES` | Empty | JSON object mapping managed server IDs to Caddy trusted-proxy CIDRs. No trust is inherited between servers. See [Security Hardening]({{< relref "/administration/security-hardening" >}}). |
+| `POSTERNPROXY_ALLOWED_ORIGINS` | Empty | Comma-separated browser origins allowed by CORS; use `http://localhost:3000` for Vite development |
+| `POSTERNPROXY_AGENT_BIN` | `/usr/local/bin/posternproxy-agent` | Agent binary for provisioning; the installer sets `/usr/local/bin/posternproxy-agent` |
 | `POSTERNPROXY_ADMIN_EMAIL` | `admin@posternproxy.local` | Initial admin email (first boot only) |
-| `POSTERNPROXY_ADMIN_PASSWORD` | *(random generated)* | Initial admin password (first boot only — printed to stderr if not set) |
+| `POSTERNPROXY_ADMIN_PASSWORD` | *(random generated)* | Initial admin password (first boot only; native install displays it in the terminal) |
 | `POSTERNPROXY_BEHIND_TLS_PROXY` | `true` | Marks session/CSRF cookies `Secure`. The installer writes `false` because the UI is served over HTTP on port 81 — browsers drop `Secure` cookies over HTTP, causing "missing CSRF token" errors. Set to `true` only when the UI is fronted by TLS and accessed over HTTPS. |
 
 ## Systemd management
@@ -157,7 +233,7 @@ systemctl status posternproxy
 systemctl status caddy
 
 # View logs
-journalctl -u posternproxy -f
+sudo tail -f /var/log/posternproxy/posternproxy.log
 journalctl -u caddy -f
 
 # Restart
@@ -166,7 +242,7 @@ systemctl restart posternproxy
 
 ## Caddy plugins included
 
-The install script builds Caddy with two plugins beyond the standard distribution:
+The installer downloads a pinned Caddy build with two plugins beyond the standard distribution:
 
 | Plugin | Purpose |
 |---|---|

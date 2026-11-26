@@ -5,78 +5,73 @@ weight: 100
 
 # Backup & Restore
 
-PosternProxy can export the entire configuration as a single JSON file and restore it on any PosternProxy instance. This is useful for:
+Administrators can export a passphrase-encrypted recovery archive from **Backup**.
+Version 2 archives include proxy, redirection, stream and dead hosts, access
+lists, custom certificate/key bytes and credential-free server descriptions.
+They can restore onto a controller with a different encryption key and storage
+root. Certificate sources are encrypted again using the destination's key.
 
-- Migrating to a new server
-- Creating a point-in-time backup before a major change
-- Seeding a new environment from a known-good configuration
+Users, sessions, API/join/agent tokens, SSH credentials, SSH host keys, runtime
+settings and Caddy's automatic certificate storage are not transferred. Keep a
+consistent offline recovery copy as described in
+[Beta upgrades and recovery]({{< relref "/administration/upgrading" >}}).
 
-## What is exported
+## Create an encrypted archive
 
-The backup JSON includes:
+1. Open **Backup** as an administrator.
+2. Enter and confirm a passphrase of at least 12 characters.
+3. Click **Export Backup** and save the JSON archive securely.
+4. Keep the passphrase separately. There is no passphrase recovery.
 
-- All proxy hosts (including all settings, custom headers, error pages, etc.)
-- All redirection hosts
-- All stream hosts
-- All dead hosts
-- All certificates (metadata only — private keys are **not** included; see note below)
-- All access lists (including client rules and hashed passwords)
-- All port forwards
-- All users (hashed passwords)
-- Settings
+The format uses scrypt with a random per-archive salt and authenticated AES-GCM
+encryption. Export fails visibly if required custom certificate material cannot
+be read. Archives are limited to 50 MiB, with a 32 MiB decrypted payload limit.
 
-## Creating a backup
+API clients use `POST /api/backup/export` with JSON `{"passphrase":"..."}` through
+the authenticated admin API. Keep passphrases in protected request files, not
+shell arguments or logs; use the normal CSRF header for cookie authentication.
 
-1. Go to **Settings → Backup & Restore**
-2. Click **Download Backup**
-3. You will be prompted to authenticate with your password before the download starts
-4. Save the `.json` file securely
+## Restore
 
-<!-- TODO: Screenshot — Settings > Backup & Restore section with Download and Restore buttons -->
+Restore replaces managed hosts, certificate metadata and access lists. It
+preserves destination users, sessions, server credentials and runtime settings.
+Keep an offline copy of the destination first.
 
-The download is served over the management API:
+1. Select the archive and enter its passphrase.
+2. For each remote server, provide a source-to-destination numeric ID mapping,
+   such as `{"2":52}`, or explicitly select **Create unmapped remote servers
+   without enrollment credentials**.
+3. Confirm the replacement.
+4. Enroll any new remote records using **Servers -> Rotate enrollment** and the
+   [agent installer]({{< relref "/multi-server/provisioning" >}}#manual-enrollment).
+5. Check configuration status and actual proxy/TLS traffic on every server.
 
-```bash
-curl -H "Authorization: Bearer <token>" \
-     http://your-server:81/api/settings/backup \
-     -o posternproxy-backup.json
-```
+Local source server 1 always maps to destination server 1. Existing mapped
+servers keep their own credentials. New remote records are pending, use manual
+deployment, and have no SSH or agent credentials. There is no implicit hostname
+mapping, credential reuse or remote installation during restore.
 
-## Restoring a backup
+API clients use `POST /api/backup/restore` with `archive` (the archive JSON object),
+`passphrase`, `server_mapping` and `create_unenrolled`. A successful data commit
+returns `committed: true`, the restored count, `synced`, and per-server
+configuration states. Configuration rejection or offline agents do not undo the
+committed desired state. `synced: false` requires checking configuration status
+and retrying application, rather than blindly repeating the data restore.
 
-{{< hint danger >}}
-**Restore overwrites all existing data.** The restore operation replaces the entire database. All current proxy hosts, certificates, and users will be replaced by the backup's contents. There is no partial restore.
-{{< /hint >}}
+Wrong passphrases, unsupported formats, invalid certificate material and invalid
+server mappings fail before destination configuration is replaced. All SQL
+changes are transactional; staged certificate sources are immutable, so a failed
+replacement cannot overwrite the previously active pair.
 
-1. Go to **Settings → Backup & Restore**
-2. Click **Restore Backup**
-3. Select the backup `.json` file
-4. Confirm the operation
-5. PosternProxy will restore the database and re-sync Caddy
+## Legacy partial JSON compatibility
 
-After restore, Caddy is immediately updated to reflect the restored configuration.
+`GET /api/backup/export` still returns the version 1 unencrypted database export;
+`POST /api/backup/import` and the UI accept that format. It includes settings and
+certificate file paths, but omits server registrations and certificate bytes.
+It needs existing matching server IDs and original certificate storage. It is
+not a portable recovery archive. Unknown versions, tables and columns are
+rejected. Treat legacy exports as sensitive configuration.
 
-## Certificate private keys
-
-Private keys for **custom** certificates are stored on disk at `POSTERNPROXY_CERT_DIR`, not in the database. The backup JSON does not include private key material.
-
-When migrating to a new server:
-1. Export the backup
-2. Copy the certificate directory (`/var/lib/posternproxy/certs/`) to the new server
-3. Restore the backup on the new server
-
-Certificates managed automatically by Caddy (Let's Encrypt HTTP-01) are stored in Caddy's own certificate store and must be re-obtained on the new server.
-
-## Automated backups
-
-For regular automated backups, use the API endpoint with a cron job:
-
-```bash
-# /etc/cron.daily/posternproxy-backup
-#!/bin/bash
-curl -s -H "Authorization: Bearer $POSTERNPROXY_TOKEN" \
-     http://localhost:81/api/settings/backup \
-     -o /var/backups/posternproxy/backup-$(date +%F).json
-```
-
-Store the backup outside the server (e.g. object storage, NFS, or a secondary server) for disaster recovery.
+Automatic certificates remain in Caddy storage. Preserve that storage in offline
+backups or allow Caddy to obtain them again after recovery. The encrypted archive
+does not preserve ACME account state or eliminate certificate-authority limits.

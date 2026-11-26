@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"io/fs"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ import (
 // RouterConfig holds all service dependencies required to construct the
 // application router.
 type RouterConfig struct {
+	TrustedProxies         []netip.Prefix
 	JWTSecret              string
 	AllowedOrigins         []string
 	DB                     *sql.DB
@@ -31,7 +33,6 @@ type RouterConfig struct {
 	StreamHostService      *services.StreamHostService
 	AccessListService      *services.AccessListService
 	CertificateService     *services.CertificateService
-	PortForwardService     *services.PortForwardService
 	ServerService          *services.ServerService
 	SettingsService        *services.SettingsService
 	APITokenService        *services.APITokenService
@@ -45,16 +46,21 @@ type RouterConfig struct {
 	FrontendFS             fs.FS
 	Version                string
 	SecureCookies          bool // Set Secure flag on cookies (true when behind TLS proxy)
+	SessionService         *services.SessionService
+	LoginRateLimit         int // Max POST /login attempts per minute per IP; <=0 uses the default
 }
 
 // NewRouter wires all handlers into a chi router, applies middleware, and mounts
 // the embedded SPA at the catch-all route.
 func NewRouter(cfg RouterConfig) *chi.Mux {
+	if cfg.SessionService == nil {
+		cfg.SessionService = services.NewSessionService(cfg.DB, cfg.JWTSecret)
+	}
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(security.ClientIdentity(cfg.TrustedProxies))
+	r.Use(security.RequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(security.SecureHeaders)
@@ -74,7 +80,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		MaxAge:           300,
 	}))
 
-	authHandler := handlers.NewAuthHandler(cfg.UserService, cfg.AuditService, cfg.JWTSecret, cfg.SecureCookies)
+	authHandler := handlers.NewAuthHandler(cfg.UserService, cfg.AuditService, cfg.JWTSecret, cfg.SecureCookies, cfg.SessionService)
 	userHandler := handlers.NewUserHandler(cfg.UserService)
 	proxyHostHandler := handlers.NewProxyHostHandler(cfg.ProxyHostService)
 	redirectionHostHandler := handlers.NewRedirectionHostHandler(cfg.RedirectionHostService)
@@ -84,7 +90,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	certHandler := handlers.NewCertificateHandler(cfg.CertificateService)
 	auditHandler := handlers.NewAuditLogHandler(cfg.AuditService)
 	dashboardHandler := handlers.NewDashboardHandler(cfg.DB)
-	portForwardHandler := handlers.NewPortForwardHandler(cfg.PortForwardService)
 	serverHandler := handlers.NewServerHandler(cfg.ServerService, cfg.Hub, cfg.CaddySyncService)
 	settingsHandler := handlers.NewSettingsHandler(cfg.SettingsService)
 	apiTokenHandler := handlers.NewAPITokenHandler(cfg.APITokenService)
@@ -94,7 +99,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	configHistoryHandler := handlers.NewConfigHistoryHandler(cfg.ConfigHistoryService)
 	nginxImportHandler := handlers.NewNginxImportHandler(cfg.NginxImportService)
 
-	loginLimiter := security.NewRateLimiter(5, time.Minute)
+	loginLimit := cfg.LoginRateLimit
+	if loginLimit <= 0 {
+		loginLimit = 5
+	}
+	loginLimiter := security.NewRateLimiter(loginLimit, time.Minute)
 
 	// agentLimiter throttles authentication attempts on the agent WebSocket
 	// endpoint to prevent brute-forcing the bcrypt-hashed agent tokens. Real
@@ -123,14 +132,15 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		r.Route("/auth", func(r chi.Router) {
 			r.With(loginLimiter.Middleware).Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
-			r.With(auth.Middleware(cfg.JWTSecret, nil)).Post("/logout", authHandler.Logout)
-			r.With(auth.Middleware(cfg.JWTSecret, nil)).Get("/me", authHandler.Me)
+			r.With(auth.Middleware(cfg.JWTSecret, nil, cfg.SessionService)).Post("/logout", authHandler.Logout)
+			r.With(auth.Middleware(cfg.JWTSecret, nil, cfg.SessionService)).Get("/me", authHandler.Me)
 		})
 
 		// All other API routes require CSRF + authentication.
 		r.Group(func(r chi.Router) {
 			r.Use(security.CSRFProtection(cfg.SecureCookies))
-			r.Use(auth.Middleware(cfg.JWTSecret, cfg.APITokenService))
+			r.Use(auth.Middleware(cfg.JWTSecret, cfg.APITokenService, cfg.SessionService))
+			r.Use(auth.RequireManagementScope)
 			r.Use(apiLimiter.Middleware)
 
 			r.Route("/users", func(r chi.Router) {
@@ -165,8 +175,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.With(auth.RequireAdmin).Delete("/{id}", certHandler.Delete)
 			})
 
-			mountHostRoutes(r, "/port-forwards", portForwardHandler)
-
 			r.Route("/servers", func(r chi.Router) {
 				r.Use(auth.RequireAdmin)
 				r.Get("/", serverHandler.List)
@@ -182,17 +190,30 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Post("/{id}/join-token", joinTokenHandler.Issue)
 				r.Delete("/{id}/join-token", joinTokenHandler.Revoke)
 				r.Post("/{id}/reset-join", serverHandler.ResetJoin)
+				r.Post("/{id}/agent-credentials", serverHandler.AgentCredentials)
 			})
 
 			// API tokens — any authenticated user can manage their own tokens;
 			// admins can see and revoke all tokens.
 			r.Route("/tokens", func(r chi.Router) {
 				r.Get("/", apiTokenHandler.List)
-				r.Post("/", apiTokenHandler.Create)
+				r.With(auth.RequireSession).Post("/", apiTokenHandler.Create)
 				r.Delete("/{id}", apiTokenHandler.Revoke)
 			})
 
-			r.Get("/audit-log", auditHandler.List)
+			r.With(auth.RequireAdmin).Get("/audit-log", auditHandler.List)
+			r.Get("/configuration", func(w http.ResponseWriter, r *http.Request) {
+				if cfg.CaddySyncService == nil {
+					handlers.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "configuration service unavailable"})
+					return
+				}
+				states, err := cfg.CaddySyncService.States(r.Context())
+				if err != nil {
+					handlers.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read configuration state"})
+					return
+				}
+				handlers.RespondJSON(w, http.StatusOK, states)
+			})
 
 			r.Route("/health", func(r chi.Router) {
 				r.Get("/upstreams", healthHandler.Upstreams)
@@ -212,6 +233,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Route("/backup", func(r chi.Router) {
 				r.Use(auth.RequireAdmin)
 				r.Get("/export", backupHandler.Export)
+				r.Post("/export", backupHandler.ExportPortable)
+				r.Post("/restore", backupHandler.RestorePortable)
 				r.Post("/import", backupHandler.Import)
 			})
 
@@ -230,6 +253,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// WebSocket endpoint for agent connections — no CSRF/JWT, uses token auth.
 	// Rate-limited per source IP to prevent brute-forcing the bcrypt token.
 	r.With(agentLimiter.Middleware).Get("/ws/agent", serverHandler.AgentConnect)
+	r.With(agentLimiter.Middleware).Get("/agent/verify", serverHandler.VerifyAgent)
 
 	// Serve the embedded SPA for all non-API routes.
 	if cfg.FrontendFS != nil {

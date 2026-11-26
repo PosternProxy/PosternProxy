@@ -31,5 +31,9 @@ func (h *HealthHandler) Upstreams(w http.ResponseWriter, r *http.Request) {
 // TLS returns the latest cached TLS-probe statuses for HTTPS-serving hosts.
 // GET /api/health/tls
 func (h *HealthHandler) TLS(w http.ResponseWriter, r *http.Request) {
+	if h.tlsProbe == nil {
+		respondError(w, http.StatusServiceUnavailable, "TLS checks unavailable")
+		return
+	}
 	respondJSON(w, http.StatusOK, h.tlsProbe.Statuses())
 }

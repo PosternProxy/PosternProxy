@@ -2,6 +2,7 @@ package security
 
 import (
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -84,5 +85,11 @@ func (rl *RateLimiter) cleanup() {
 // realIP returns the rate-limiting key for a request. It relies on
 // chi's RealIP middleware having already normalised r.RemoteAddr.
 func realIP(r *http.Request) string {
+	if peer, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return peer.Addr().Unmap().WithZone("").String()
+	}
+	if ip, err := netip.ParseAddr(r.RemoteAddr); err == nil {
+		return ip.Unmap().WithZone("").String()
+	}
 	return r.RemoteAddr
 }

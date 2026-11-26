@@ -5,28 +5,34 @@ weight: 9
 
 # Config History
 
-PosternProxy records a snapshot of every proxy host's configuration before each change. You can browse the history and roll back to any previous state.
+PosternProxy records proxy host configuration snapshots on creation, before
+edits, and before deletion. You can use the history to roll back an existing
+proxy host.
 
 ## Viewing history
 
-Open the **⋮** menu on any proxy host row in the table and click **History**. A drawer slides open showing the last 100 snapshots in reverse chronological order.
+Open the **⋮** menu on a proxy host row and click **History**. The dialog
+shows the last 100 snapshots in reverse chronological order.
 
 Each entry shows:
 - Timestamp of the change
 - The user who made it
-- A brief diff of what changed
+- The type of change
 
 <!-- TODO: Screenshot — Config History drawer with several entries -->
 
 ## Rolling back
 
-Click **Restore** on any snapshot to revert the proxy host to that state. PosternProxy will:
+Click **Rollback** on a snapshot, then **Confirm Rollback**. PosternProxy will:
 
 1. Save the current state as a new snapshot (so you can undo the rollback)
 2. Write the restored configuration to the database
 3. Push the updated Caddy config immediately
 
-The rollback is atomic — if the Caddy push fails, the database is not changed.
+Rollback saves the restored configuration as desired state. If Caddy rejects
+the apply, the saved state remains available for an administrator to retry. An
+offline agent applies the desired state after reconnecting. See
+[Configuration application status]({{< relref "/multi-server/configuration-status" >}}).
 
 ## What is captured
 
@@ -45,14 +51,18 @@ Each snapshot captures the full proxy host record, including:
 - Custom locations
 - Advanced config
 
-Audit log entries and enabled/disabled state are **not** included in snapshots (enable/disable has its own event log).
+Rollback leaves the host's current enabled or disabled state in place.
 
 ## Retention
 
-PosternProxy keeps the 100 most recent snapshots per proxy host. Older entries are pruned automatically when new snapshots are added.
+The history API returns the 100 most recent snapshots per proxy host. Older
+database records are not automatically pruned by the current service.
 
 ## Notes
 
-- Config history is stored in the `config_history` table in SQLite.
+- Snapshot contents are encrypted at rest. The history list shows metadata,
+  and the controller decrypts snapshots internally during rollback.
 - History is per-resource: proxy hosts have their own history, independent of redirection hosts, stream hosts, etc.
-- History entries are not deleted when a proxy host is deleted. If you recreate a proxy host with the same ID, old history will not be associated with it.
+- History entries can remain after a host is deleted. The UI rolls back existing
+  proxy hosts; it is not an undelete facility. Creation entries have no prior
+  state and cannot be rolled back.

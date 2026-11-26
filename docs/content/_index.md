@@ -5,26 +5,29 @@ type: docs
 
 # PosternProxy
 
-PosternProxy is an enterprise-grade reverse proxy manager built on [Caddy](https://caddyserver.com/). It provides a web UI for managing proxy hosts, SSL certificates, access control, port forwarding, and multi-server deployments — all backed by a single Go binary with an embedded Vue 3 frontend.
+PosternProxy is a beta reverse proxy manager built on [Caddy](https://caddyserver.com/).
+The controller is a Go binary with an embedded Vue frontend. Caddy handles
+traffic, and remote nodes run a separate outbound agent. Full build bundles
+include the controller, agent, custom Caddy and checksums.
+
+Start with [Installation]({{< relref "/getting-started/installation" >}}) and review
+[Beta limitations]({{< relref "/administration/beta-limitations" >}}) before deployment.
 
 ## Why PosternProxy?
 
-| Feature | Nginx Proxy Manager | PosternProxy |
-|---|---|---|
-| Proxy engine | Nginx | Caddy (automatic HTTPS by default) |
-| Deployment | Docker required | Single binary, bare-metal Debian/Ubuntu |
-| Multi-server | ✗ | ✓ WebSocket agent architecture |
-| Load balancing | ✗ | ✓ 6 policies, per-host |
-| Health checks | ✗ | ✓ Active + passive, live dashboard |
-| Rate limiting | ✗ | ✓ Per-host, per-IP sliding window |
-| Header injection | ✗ | ✓ Request + response, with presets |
-| Custom error pages | ✗ | ✓ Per-host 404/502/503 HTML |
-| TLS passthrough | ✗ | ✓ SNI-matched L4 tunnelling |
-| Config history | ✗ | ✓ 100-entry rollback per resource |
-| API tokens | ✗ | ✓ Bearer token automation |
-| Nginx import | ✗ | ✓ Parse + preview existing configs |
-| Backup / restore | ✗ | ✓ JSON export with authenticated download |
-| Audit log | Partial | ✓ Full mutation log with IP + user |
+| Capability | Current scope |
+|---|---|
+| HTTP proxying | Domains, upstreams, load-balancing policies, active/passive checks |
+| HTTPS | Caddy-managed certificates and custom uploads; certificate access/validation limits remain |
+| Traffic Forwarding | Caddy L4 TCP/UDP forwarding and SNI passthrough |
+| Access control | Proxy-host IP rules and per-host rate limits |
+| Response customization | Headers and Caddy-generated 502/503 error pages |
+| Multi-server | Outbound agents and persisted desired/applied configuration state |
+| Config history | Proxy-host rollback; latest 100 entries listed |
+| Automation | Scoped API tokens with role and CSRF enforcement |
+| Nginx import | File preview and confirmed import; manual review required |
+| Configuration export | Partial JSON export; not portable disaster recovery |
+| Audit | Recorded management events; coverage is incomplete |
 
 ## Quick navigation
 

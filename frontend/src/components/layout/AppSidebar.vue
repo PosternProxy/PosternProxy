@@ -2,6 +2,7 @@
 import { useAuthStore } from '@/stores/auth'
 import { useRoute } from 'vue-router'
 import ServerPicker from './ServerPicker.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -95,6 +96,7 @@ const navGroups: NavGroup[] = [
       {
         path: '/audit-log',
         label: 'Audit Log',
+ adminOnly: true,
         icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2',
       },
       {
@@ -126,9 +128,20 @@ function isActive(path: string) {
     class="fixed inset-y-0 left-0 z-30 flex flex-col bg-slate-900 text-white transition-all duration-300"
     :class="collapsed ? 'w-16' : 'w-64'"
   >
-    <div class="flex h-16 items-center justify-between px-4">
-      <span v-if="!collapsed" class="text-lg font-bold tracking-wide">PosternProxy</span>
-      <button class="rounded p-1 hover:bg-slate-700" @click="$emit('toggle')">
+    <div
+      class="relative flex shrink-0 items-start justify-center"
+      :class="collapsed ? 'h-28 pt-2' : 'h-44'"
+    >
+      <RouterLink to="/dashboard" aria-label="PosternProxy dashboard">
+        <BrandLogo dark :class="collapsed ? 'h-14 w-14' : 'h-44 w-44'" />
+      </RouterLink>
+      <button
+        class="absolute rounded p-1 hover:bg-slate-700"
+        :class="collapsed ? 'bottom-2 right-5' : 'right-3 top-3'"
+        :aria-label="collapsed ? 'Expand menu' : 'Collapse menu'"
+        :aria-expanded="!collapsed"
+        @click="$emit('toggle')"
+      >
         <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
             stroke-linecap="round"

@@ -29,7 +29,7 @@ Go to **Users** in the sidebar (admin only).
 | **Email** | Login email (must be unique) |
 | **Password** | Initial password (minimum 8 characters) |
 | **Role** | `admin` or `viewer` |
-| **Active** | Uncheck to create a disabled account |
+| **Active** | Accounts are created active; disable them after creation using the list toggle |
 
 3. Click **Create**
 
@@ -41,17 +41,21 @@ Click the **Edit** icon on any user row to change their name, email, role, or ac
 
 ### Changing a password
 
-Click **Change Password** on any user row (admin can reset any user's password; users can change their own from the profile menu).
+Administrators can use **Change Password** on a user row, including their own.
+The current profile menu does not provide a separate password editor; viewers
+need an administrator to reset their password.
 
 Passwords must be at least 8 characters. PosternProxy hashes them with bcrypt at cost factor 12.
 
 ### Deactivating a user
 
-Toggle the **Active** switch on a user to disable their account. Deactivated users cannot log in and any existing sessions are invalidated. Their API tokens continue to exist but will be rejected.
+Toggle the **Active** switch on a user to disable their account. Disabling an
+account revokes its sessions and API tokens.
 
 ### Deleting a user
 
-Click **Delete** to permanently remove a user account. This also deletes all of their API tokens.
+Click **Delete** to permanently remove a user account. Its credentials can no
+longer authenticate; historical audit records can retain a null user reference.
 
 {{< hint warning >}}
 **You cannot delete your own account.** To remove the admin account, first promote another user to admin, log in as that user, then delete the original admin.
@@ -62,7 +66,7 @@ Click **Delete** to permanently remove a user account. This also deletes all of 
 On first boot, PosternProxy creates an admin account and prints a **randomly generated 20-character password** to stderr. Check the service logs to retrieve it:
 
 ```bash
-journalctl -u posternproxy --no-pager | grep -A5 "INITIAL SETUP"
+sudo grep -A6 "INITIAL SETUP" /var/log/posternproxy/posternproxy.log
 ```
 
 The default email is `admin@posternproxy.local` (override with `POSTERNPROXY_ADMIN_EMAIL`). To set a specific password instead of a generated one, set `POSTERNPROXY_ADMIN_PASSWORD` before first boot.
@@ -74,11 +78,13 @@ Change the password immediately after installation. See [Quick Start]({{< relref
 If you lose access to the admin account, use the `reset-password` subcommand directly on the server — the service does not need to be running:
 
 ```bash
-# Reset the first admin account found
-posternproxy reset-password
+# Reset the first admin account using the installed configuration and identity
+sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; \
+  /usr/local/bin/posternproxy reset-password'
 
-# Reset a specific account by email
-posternproxy reset-password --email admin@posternproxy.local
+# Reset a specific account
+sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; \
+  /usr/local/bin/posternproxy reset-password --email admin@posternproxy.local'
 ```
 
 A new random password is printed to the terminal. In Docker:
@@ -89,10 +95,15 @@ docker exec posternproxy posternproxy reset-password
 
 ## Session management
 
-Sessions use JWT access tokens (15-minute TTL) and refresh tokens (7-day TTL) stored in HttpOnly, Secure, SameSite=Strict cookies. Sessions expire automatically and are not tracked server-side (stateless JWT).
+The controller tracks sessions server-side. JWT access tokens last 15 minutes,
+and refresh tokens last 7 days. The refresh cookie is HttpOnly and
+SameSite=Strict, with Secure enabled when configured. Each refresh rotates the
+refresh token. Signing out revokes the current session. Password changes and
+changes to the account's role or active status revoke its sessions and API
+tokens.
 
 ## Notes
 
-- Email addresses are case-insensitive for login but stored as-entered.
+- Use the stored email spelling when logging in; the lookup does not normalize case.
 - Failed login attempts are logged in the [Audit Log]({{< relref "/audit-log" >}}) and trigger fail2ban after the configured threshold.
 - There is no password complexity requirement beyond the 8-character minimum. Encourage users to use a password manager.

@@ -19,10 +19,13 @@ Browser → PosternProxy Controller (:81) → REST API → SQLite
                           ↓              ↓
                     Agent (Server A)   Agent (Server B)
                           ↓              ↓
-                     Caddy + iptables  Caddy + iptables
+                        Caddy            Caddy
 ```
 
-The agent makes an **outbound** WebSocket connection to the controller. No inbound ports are needed on the remote server beyond 80 and 443 (and SSH for provisioning).
+The agent makes an **outbound** WebSocket connection to the controller and needs
+no inbound agent port. Open the node's actual HTTP/HTTPS, stream, and SSH ports
+as required. The bundle includes the agent and Caddy; no controller service is
+needed on a remote node.
 
 ## Adding a server
 
@@ -35,10 +38,12 @@ The agent makes an **outbound** WebSocket connection to the controller. No inbou
 | **Name** | Display name for the server |
 | **Hostname / IP** | Address for SSH provisioning |
 | **SSH Port** | Default: 22 |
-| **SSH User** | Username with root or sudo access |
+| **SSH User** | Root or passwordless sudo |
 | **Authentication** | Password or private key |
 
-4. Click **Provision** — PosternProxy SSH's into the server and installs everything automatically
+4. Start provisioning and inspect its output. Read the
+   [provisioning prerequisites]({{< relref "/multi-server/provisioning" >}})
+   first, including artifact architecture and advertised controller URL.
 
 <!-- TODO: Screenshot — Add Server wizard Step 1 (connection details) -->
 
@@ -46,18 +51,21 @@ The agent makes an **outbound** WebSocket connection to the controller. No inbou
 
 During provisioning, PosternProxy streams real-time output to the **terminal panel** in the wizard. The provisioner:
 
-1. Installs Go and builds Caddy with the L4 and rate-limit plugins
-2. Copies the `posternproxy-agent` binary to the server
-3. Creates dedicated system users (`caddy`, `posternproxy-agent`) with no login shell
-4. Writes the agent config (`/etc/posternproxy-agent/config.env`) with the controller URL and a unique pre-shared token
-5. Installs systemd services with full hardening
-6. Configures UFW, fail2ban, unattended-upgrades
-7. Applies sysctl hardening
-8. Starts the agent service
+1. Verifies the remote architecture and matching local agent/Caddy artifacts
+2. Uploads private credential and checksum files
+3. Runs the native agent installer with dedicated users and hardened services
+4. Preserves existing SSH settings and firewall rules
+5. Starts `caddy` and `posternproxy-agent`
+6. Waits for authentication and acknowledgement of the desired configuration
+
+Manual enrollment skips SSH and displays a one-time private JSON credential for
+`posternproxy-agent install`. See the provisioning guide below.
 
 <!-- TODO: Screenshot — Provisioning terminal panel showing live log output -->
 
-Once the agent starts, it connects to the controller WebSocket endpoint. The server status changes from **Provisioning** to **Online**.
+Once correctly configured, the agent authenticates to the controller WebSocket
+endpoint. Check connection status and the separate desired/applied configuration
+status; script completion alone does not establish readiness.
 
 See [Provisioning]({{< relref "/multi-server/provisioning" >}}) for full details.
 
@@ -80,35 +88,43 @@ The Servers page shows all registered servers:
 
 When creating or editing a proxy host, redirection host, stream host, or dead host, a **Server** dropdown lets you assign the resource to a specific server (or leave it on the local server).
 
-The controller pushes the Caddy config update to the correct agent automatically. If the agent is offline, the command is queued and sent when the agent reconnects.
+The controller saves desired configuration for the selected server and reconciles
+it through that server's agent. Offline changes persist in the database and are
+coalesced into current state on reconnect.
 
 ## Server selector
 
-A **Server** dropdown in the top header lets you filter all resource views to show only the resources on a specific server, or "All Servers" for a combined view.
+A **Server** picker in the sidebar selects the server for resource views. There
+is no combined **All Servers** option in the current picker.
 
 ## Offline handling
 
 If an agent goes offline:
 - Its status changes to **Offline** in the Servers list
-- The Dashboard shows the server as offline
-- Pending config changes are queued in memory
+- Check the Servers page for its connection status
+- Desired configuration and its revision persist in the controller database
 - On reconnect, the controller sends a **full sync** to ensure the agent is up to date
 
 ## Re-provisioning
 
-Click **Re-Provision** on a server to re-run the provisioning script. This is useful for:
+Click **Redeploy** on a server to re-run provisioning. This can be used for:
 - Updating the agent binary after a PosternProxy upgrade
 - Reapplying security hardening after OS changes
 - Recovering from a broken agent installation
+
+Redeploy rotates credentials, disconnects the old agent, and preserves firewall rules. Review the provisioning prerequisites before using it on an existing host.
 
 ## Removing a server
 
 Click **Delete** on a server to remove it from PosternProxy. This does not uninstall the agent from the remote server; you must do that manually:
 
 ```bash
-systemctl stop posternproxy-agent
-systemctl disable posternproxy-agent
-rm /usr/local/bin/posternproxy-agent
+# For a manually installed posternproxy-agent service:
+systemctl disable --now posternproxy-agent
 ```
 
-All proxy hosts assigned to the deleted server remain in the database but will be reassigned to the local server.
+Historical installations may use `caddyproxy-agent` instead. Remove binaries,
+service files, and credentials only after confirming which paths your node uses.
+Deleting a server does not reassign its hosts to Local: move or delete assigned
+resources first, or foreign-key references can prevent deletion. The Local server
+cannot be deleted.

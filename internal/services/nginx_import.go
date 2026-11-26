@@ -46,10 +46,12 @@ func (s *NginxImportService) Confirm(ctx context.Context, callerID *int64, resul
 			Locations:       json.RawMessage("[]"),
 			RateLimitWindow: "1m",
 		}
-		if _, err := s.proxyHosts.Create(ctx, callerID, input, ip); err != nil {
-			summary.Errors = append(summary.Errors, fmt.Sprintf("proxy %v: %v", ph.DomainNames, err))
-		} else {
+		host, err := s.proxyHosts.Create(ctx, callerID, input, ip)
+		if host != nil {
 			summary.ProxyHostsCreated++
+		}
+		if err != nil {
+			summary.Errors = append(summary.Errors, fmt.Sprintf("proxy %v: %v", ph.DomainNames, err))
 		}
 	}
 
@@ -66,10 +68,12 @@ func (s *NginxImportService) Confirm(ctx context.Context, callerID *int64, resul
 			ForwardPath:       rh.ForwardPath,
 			StatusCode:        statusCode,
 		}
-		if _, err := s.redirectionHosts.Create(ctx, callerID, input, ip); err != nil {
-			summary.Errors = append(summary.Errors, fmt.Sprintf("redirect %v: %v", rh.DomainNames, err))
-		} else {
+		host, err := s.redirectionHosts.Create(ctx, callerID, input, ip)
+		if host != nil {
 			summary.RedirectionHostsCreated++
+		}
+		if err != nil {
+			summary.Errors = append(summary.Errors, fmt.Sprintf("redirect %v: %v", rh.DomainNames, err))
 		}
 	}
 

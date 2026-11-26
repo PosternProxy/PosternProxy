@@ -1,43 +1,44 @@
 ---
-title: Dead Hosts (404 Hosts)
+title: Dead Hosts (Parked Domains)
 weight: 50
 ---
 
 # Dead Hosts
 
-Dead hosts (also called 404 hosts) tell Caddy to return a `404 Not Found` for all requests to specified domain names. They are useful for:
-
-- Parking domains you own but are not yet using
-- Returning a clean 404 instead of Caddy's default "no route" response
-- Blocking access to domains that should not be publicly accessible
-- Preventing certificate issuance errors for domains pointed at your server
+Dead hosts serve a fixed HTML response for a domain instead of proxying to an
+upstream. Use them for parked domains, coming-soon pages, and maintenance pages.
 
 ## Creating a dead host
 
-1. Click **Dead Hosts** in the sidebar
-2. Click **+ Add Dead Host**
-3. Fill in the form:
+1. Open **Parked Domains** in the sidebar and add a parked-domain entry.
+2. Enter the domain names and select the target server.
+3. Choose **200**, **404**, **410**, or **503** as the response status.
+4. Optionally enter a custom HTML body. Leaving it blank uses the bundled parked
+   page for the selected status.
+5. Select a custom certificate if needed, then create the host.
 
-| Field | Description |
-|---|---|
-| **Domain Names** | One or more domains to serve 404 for (press Enter after each) |
-| **SSL Certificate** | Optional — select a cert if you want HTTPS on the dead host |
-| **Access List** | Optional — restrict which clients can even reach the 404 page |
+The bundled parked page includes the PosternProxy logo and follows the visitor's
+system light or dark theme automatically. Images and styles are self-contained,
+including on remote servers. Custom HTML controls its own appearance.
 
-4. Click **Create**
+Select **HTTP only (no certificate)** for plain HTTP without an HTTPS route or
+certificate request. Otherwise the host serves both HTTP and HTTPS; choose a
+custom certificate or let Caddy obtain one automatically. Existing parked domains
+retain HTTPS behavior after upgrading. The HTTP-only choice is included in
+configuration backups and applies to the assigned local or remote server.
 
-<!-- TODO: Screenshot — Add Dead Host modal -->
+The **TLS** column shows readiness. Expand its badge for per-domain results,
+expiry/check times, and certificate troubleshooting. Live probes cover local
+hosts; remote rows direct you to the assigned node. See
+[Certificates]({{< relref "/certificates" >}}#status-and-lets-encrypt-errors).
 
-## SSL on dead hosts
+## Access and application status
 
-Selecting a certificate allows Caddy to serve TLS for the domain. Without a certificate, Caddy will still attempt to obtain one automatically if the domain resolves to the server.
+Select an access list to enforce its IP allow/deny rules on both HTTP and HTTPS
+parked-domain routes. The public option applies no IP restriction.
 
-To suppress automatic certificate issuance (e.g. for internal domains that should not have public certs), leave SSL blank and ensure the domain does not resolve to the public internet.
-
-## Access lists on dead hosts
-
-Combining a dead host with an [access list]({{< relref "/access-lists" >}}) lets you create a "blackhole" that only your internal network can reach. This is useful for domains reserved for internal use where you want to prevent external certificate issuance probes from succeeding.
-
-## Enable / disable
-
-Dead hosts can be toggled. When disabled, the domain no longer has any route in Caddy, and Caddy's default "no such site" response applies.
+Enable and disable controls save desired configuration and trigger application.
+Check [Configuration application status]({{< relref "/multi-server/configuration-status" >}})
+when Caddy rejects a change or the assigned remote agent is offline. Disabling a
+host removes its managed route after application; other routes on that server
+can still match the same request.

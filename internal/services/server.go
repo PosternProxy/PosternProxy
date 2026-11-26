@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agent"
+	"github.com/posternproxy/posternproxy/internal/agentconfig"
 	"github.com/posternproxy/posternproxy/internal/caddy"
 	"github.com/posternproxy/posternproxy/internal/models"
 	"github.com/posternproxy/posternproxy/internal/provisioner"
@@ -18,14 +20,17 @@ import (
 
 // ServerService manages the servers table and orchestrates provisioning.
 type ServerService struct {
-	db            *sql.DB
-	audit         *AuditService
-	hub           *agent.Hub
-	tokens        *APITokenService
-	caddy         *caddy.Client // local Caddy admin API, for the local server's liveness
-	encKey        [32]byte
-	controllerURL string // e.g. "wss://my-controller:81" — sent to agent config
-	agentBinPath  string // optional; path to local caddyproxy-agent binary
+	db               *sql.DB
+	audit            *AuditService
+	hub              *agent.Hub
+	tokens           *APITokenService
+	caddy            *caddy.Client // local Caddy admin API, for the local server's liveness
+	encKey           [32]byte
+	controllerURL    string // e.g. "wss://my-controller:81" — sent to agent config
+	caddyBinPath     string
+	version          string
+	agentBinPath     string // optional; path to local caddyproxy-agent binary
+	artifactCacheDir string
 
 	// runsMu protects runs.
 	// runs holds the active or most-recent ProvisionRun per server. An entry
@@ -65,7 +70,7 @@ func (s *ServerService) reconcileStatus(srv *models.Server) {
 		}
 		return
 	}
-	srv.Online = s.hub.IsOnline(srv.ID)
+	srv.Online = s.hub != nil && s.hub.IsOnline(srv.ID)
 }
 
 // GetProvisionRun returns the most-recent ProvisionRun for the given server,
@@ -154,6 +159,17 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 		input.SSHUser = "root"
 	}
 
+	if input.DeploymentType != "manual" {
+		if err := provisioner.ValidateInput(provisioner.ProvisionInput{Host: input.Hostname, SSHPort: input.SSHPort, SSHUser: input.SSHUser, SSHAuthMethod: input.SSHAuthMethod, SSHCredentials: input.SSHCredentials, ControllerURL: s.controllerURL, AgentToken: "validation", ServerID: 2, DeploymentType: input.DeploymentType}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := agentconfig.ValidateURL(s.controllerURL); err != nil {
+			return nil, err
+		}
+		input.SSHCredentials = ""
+		input.SSHAuthMethod = "password"
+	}
 	// Encrypt SSH credentials before storing.
 	encCreds, err := security.Encrypt(s.encKey, input.SSHCredentials)
 	if err != nil {
@@ -193,10 +209,6 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 		}
 		return nil, fmt.Errorf("create agent token: %w", err)
 	}
-	tokenHash, _ := security.BcryptHash(token)
-	if _, err := s.db.ExecContext(ctx, `UPDATE servers SET agent_token_hash=? WHERE id=?`, tokenHash, id); err != nil {
-		log.Warn().Err(err).Int64("server_id", id).Msg("failed to write agent_token_hash; agent will not be able to authenticate")
-	}
 
 	srv, err := s.GetByID(ctx, id)
 	if err != nil {
@@ -204,6 +216,14 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 	}
 	s.audit.Log(ctx, callerID, "create", "server", &id, map[string]any{"name": input.Name, "hostname": input.Hostname}, ip)
 
+	if deploymentType == "manual" {
+		if _, err := s.db.ExecContext(ctx, `UPDATE servers SET status='pending' WHERE id=?`, id); err != nil {
+			return nil, err
+		}
+		srv.Status = "pending"
+		srv.Enrollment = &agentconfig.Config{ControllerURL: s.controllerURL, Token: token, ServerID: id}
+		return srv, nil
+	}
 	// startRun for a brand-new server cannot conflict — no prior run exists.
 	run, err := s.startRun(id)
 	if err != nil {
@@ -211,16 +231,19 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 	}
 
 	pInput := provisioner.ProvisionInput{
-		Host:           input.Hostname,
-		SSHPort:        input.SSHPort,
-		SSHUser:        input.SSHUser,
-		SSHAuthMethod:  input.SSHAuthMethod,
-		SSHCredentials: input.SSHCredentials,
-		ControllerURL:  s.controllerURL,
-		AgentToken:     token,
-		ServerID:       id,
-		AgentBinPath:   s.agentBinPath,
-		DeploymentType: deploymentType,
+		Host:             input.Hostname,
+		SSHPort:          input.SSHPort,
+		SSHUser:          input.SSHUser,
+		SSHAuthMethod:    input.SSHAuthMethod,
+		SSHCredentials:   input.SSHCredentials,
+		ControllerURL:    s.controllerURL,
+		AgentToken:       token,
+		ServerID:         id,
+		AgentBinPath:     s.agentBinPath,
+		ArtifactCacheDir: s.artifactCacheDir,
+		CaddyBinPath:     s.caddyBinPath,
+		Version:          s.version,
+		DeploymentType:   deploymentType,
 		// SSHHostKey is empty on first provision — TOFU will accept and persist the key.
 		OnHostKeyAccepted: func(fp string) {
 			// Background work — request context would cancel host-key persistence if the user navigated away.
@@ -230,7 +253,12 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 			}
 		},
 	}
-	s.runProvisioner(id, pInput, run)
+	if _, err := s.db.ExecContext(ctx, `UPDATE server_config_state SET desired_revision=desired_revision+1,status='queued',error='' WHERE server_id=?`, id); err != nil {
+		run.finish(provisioner.Result{Error: err.Error()})
+		return nil, err
+	}
+	s.hub.Disconnect(id)
+	s.runProvisioner(id, pInput, run, callerID, ip)
 
 	return srv, nil
 }
@@ -239,12 +267,40 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 // hostname, SSH connection parameters, and re-encrypted credentials).
 // is_local=1 servers are not updatable.
 func (s *ServerService) UpdateCredentials(ctx context.Context, callerID *int64, id int64, input models.CreateServerInput, ip string) error {
-	if input.Hostname == "" {
-		return fmt.Errorf("hostname is required")
-	}
-	encCreds, err := security.Encrypt(s.encKey, input.SSHCredentials)
+	existing, err := s.GetByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("encrypt credentials: %w", err)
+		return err
+	}
+	if existing == nil {
+		return ErrServerNotFound
+	}
+	if existing.IsLocal {
+		return fmt.Errorf("cannot update local server credentials")
+	}
+	if input.Name == "" {
+		input.Name = existing.Name
+	}
+	if input.Hostname == "" {
+		input.Hostname = existing.Hostname
+	}
+	if input.SSHPort == 0 {
+		input.SSHPort = existing.SSHPort
+	}
+	if input.SSHUser == "" {
+		input.SSHUser = existing.SSHUser
+	}
+	if input.SSHAuthMethod == "" {
+		input.SSHAuthMethod = existing.SSHAuthMethod
+	}
+	var encCreds string
+	if err := s.db.QueryRowContext(ctx, `SELECT ssh_credentials_encrypted FROM servers WHERE id=?`, id).Scan(&encCreds); err != nil {
+		return err
+	}
+	if input.SSHCredentials != "" {
+		encCreds, err = security.Encrypt(s.encKey, input.SSHCredentials)
+		if err != nil {
+			return fmt.Errorf("encrypt credentials: %w", err)
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE servers SET name=?, hostname=?, ssh_port=?, ssh_user=?, ssh_auth_method=?,
@@ -318,6 +374,7 @@ func (s *ServerService) ResetJoin(ctx context.Context, callerID *int64, serverID
 		 WHERE id = ?`, serverID); err != nil {
 		return fmt.Errorf("clear agent token: %w", err)
 	}
+	s.hub.Disconnect(serverID)
 	s.audit.Log(ctx, callerID, "server.reset_join", "server", &serverID, map[string]any{"force": force}, remoteAddr)
 	return nil
 }
@@ -336,7 +393,7 @@ func (s *ServerService) Reprovision(ctx context.Context, callerID *int64, id int
 
 	// Claim the run slot BEFORE rotating the agent token. If we rotated first
 	// and then discovered another run was in progress, we'd have invalidated
-	// the in-flight run's token — exactly the bug H-5 calls out.
+	// the in-flight run's token — the active run must keep its credential.
 	run, err := s.startRun(id)
 	if err != nil {
 		return err
@@ -355,29 +412,35 @@ func (s *ServerService) Reprovision(ctx context.Context, callerID *int64, id int
 		return fmt.Errorf("decrypt credentials: %w", err)
 	}
 
+	if err := provisioner.ValidateInput(provisioner.ProvisionInput{Host: srv.Hostname, SSHPort: srv.SSHPort, SSHUser: srv.SSHUser, SSHAuthMethod: srv.SSHAuthMethod, SSHCredentials: creds, ControllerURL: s.controllerURL, AgentToken: "validation", ServerID: id, DeploymentType: srv.DeploymentType}); err != nil {
+		run.finish(provisioner.Result{Error: err.Error()})
+		return err
+	}
 	// Rotate the agent token via the unified token service.
 	token, err := s.tokens.CreateForServer(ctx, id, callerID) // also revokes old agent token
 	if err != nil {
 		run.finish(provisioner.Result{Success: false, Error: err.Error()})
 		return fmt.Errorf("rotate agent token: %w", err)
 	}
-	tokenHash, _ := security.BcryptHash(token)
-	if _, err := s.db.ExecContext(ctx, `UPDATE servers SET status='provisioning', agent_token_hash=?, provision_log='', updated_at=datetime('now') WHERE id=?`,
-		tokenHash, id); err != nil {
-		log.Warn().Err(err).Int64("server_id", id).Msg("failed to mark server as provisioning; agent may fail to authenticate on reconnect")
+	if _, err := s.db.ExecContext(ctx, `UPDATE servers SET status='provisioning',provision_log='',updated_at=datetime('now') WHERE id=?`, id); err != nil {
+		run.finish(provisioner.Result{Error: err.Error()})
+		return err
 	}
 
 	pInput := provisioner.ProvisionInput{
-		Host:           srv.Hostname,
-		SSHPort:        srv.SSHPort,
-		SSHUser:        srv.SSHUser,
-		SSHAuthMethod:  srv.SSHAuthMethod,
-		SSHCredentials: creds,
-		ControllerURL:  s.controllerURL,
-		AgentToken:     token,
-		ServerID:       id,
-		AgentBinPath:   s.agentBinPath,
-		DeploymentType: srv.DeploymentType,
+		Host:             srv.Hostname,
+		SSHPort:          srv.SSHPort,
+		SSHUser:          srv.SSHUser,
+		SSHAuthMethod:    srv.SSHAuthMethod,
+		SSHCredentials:   creds,
+		ControllerURL:    s.controllerURL,
+		AgentToken:       token,
+		ServerID:         id,
+		AgentBinPath:     s.agentBinPath,
+		ArtifactCacheDir: s.artifactCacheDir,
+		CaddyBinPath:     s.caddyBinPath,
+		Version:          s.version,
+		DeploymentType:   srv.DeploymentType,
 		// SSHHostKey may be empty for servers provisioned before TOFU was introduced;
 		// in that case we fall back to TOFU and store the key going forward.
 		SSHHostKey: srv.SSHHostKey,
@@ -389,7 +452,12 @@ func (s *ServerService) Reprovision(ctx context.Context, callerID *int64, id int
 			}
 		},
 	}
-	s.runProvisioner(id, pInput, run)
+	if _, err := s.db.ExecContext(ctx, `UPDATE server_config_state SET desired_revision=desired_revision+1,status='queued',error='' WHERE server_id=?`, id); err != nil {
+		run.finish(provisioner.Result{Error: err.Error()})
+		return err
+	}
+	s.hub.Disconnect(id)
+	s.runProvisioner(id, pInput, run, callerID, ip)
 
 	s.audit.Log(ctx, callerID, "update", "server", &id, map[string]any{"action": "reprovision"}, ip)
 	return nil
@@ -399,7 +467,7 @@ func (s *ServerService) Reprovision(ctx context.Context, callerID *int64, id int
 // and persists the final result. It is the single producer that broadcasts
 // log lines to all active subscribers, and the single point where the DB row
 // transitions from "provisioning" to "online" or "error".
-func (s *ServerService) runProvisioner(id int64, pInput provisioner.ProvisionInput, run *ProvisionRun) {
+func (s *ServerService) runProvisioner(id int64, pInput provisioner.ProvisionInput, run *ProvisionRun, actorID *int64, ip string) {
 	logCh := make(chan string, 256)
 	resultCh := make(chan provisioner.Result, 1)
 
@@ -423,6 +491,18 @@ func (s *ServerService) runProvisioner(id int64, pInput provisioner.ProvisionInp
 		res := <-resultCh
 		close(logCh)
 		<-logsDone
+		if res.Success {
+			run.appendLine("Services installed; waiting for agent authentication and applied configuration.")
+			readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			err := s.waitProvisionReady(readyCtx, id)
+			cancel()
+			if err != nil {
+				res.Success = false
+				res.Error = err.Error()
+				run.appendLine(res.Error)
+				res.Log += "\n" + res.Error
+			}
+		}
 		status := "online"
 		if !res.Success {
 			status = "error"
@@ -440,6 +520,7 @@ func (s *ServerService) runProvisioner(id int64, pInput provisioner.ProvisionInp
 			status, stored, id); err != nil {
 			log.Warn().Err(err).Int64("server_id", id).Str("final_status", status).Msg("failed to persist final provisioning status; server row may be stale")
 		}
+		s.audit.Log(ctx, actorID, "provision", "server", &id, map[string]any{"success": res.Success}, ip)
 		run.finish(res)
 	}()
 }
@@ -447,12 +528,12 @@ func (s *ServerService) runProvisioner(id int64, pInput provisioner.ProvisionInp
 // UpdateFromStatus persists a status heartbeat from an agent.
 // Errors are logged at warn level rather than returned — heartbeats arrive
 // every 30 s, so a transient DB lock is recoverable on the next tick; silent
-// failure would leave the server appearing offline indefinitely (audit M-9).
+// failure would leave the server appearing offline indefinitely.
 func (s *ServerService) UpdateFromStatus(ctx context.Context, serverID int64, p agent.StatusPayload) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE servers
-		SET status='online', last_seen_at=?, last_status_at=?,
+		SET status=CASE WHEN status='provisioning' THEN status ELSE 'online' END, last_seen_at=?, last_status_at=?,
 		    caddy_version=?, uptime_seconds=?, active_routes=?,
 		    updated_at=datetime('now')
 		WHERE id=?`,
@@ -477,14 +558,37 @@ var dummyAgentTokenHash = func() string {
 // for the given server. Returns true on success. Runs in roughly constant
 // time regardless of whether serverID exists, to prevent ID enumeration.
 func (s *ServerService) ValidateAgentToken(ctx context.Context, serverID int64, token string) bool {
+	_, valid := s.AgentAuthorization(ctx, serverID, token)
+	return valid
+}
+
+// AgentAuthorization binds a connection to the credential that authenticated it.
+func (s *ServerService) AgentAuthorization(ctx context.Context, serverID int64, token string) (func() bool, bool) {
 	var hash string
 	err := s.db.QueryRowContext(ctx, `SELECT agent_token_hash FROM servers WHERE id=?`, serverID).Scan(&hash)
 	if err != nil || hash == "" {
 		// Run bcrypt against a dummy hash so timing matches the happy path.
 		_ = security.BcryptCompare(dummyAgentTokenHash, token)
-		return false
+		return nil, false
 	}
-	return security.BcryptCompare(hash, token) == nil
+	if security.BcryptCompare(hash, token) != nil {
+		return nil, false
+	}
+	return func() bool {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var current string
+		if err := s.db.QueryRowContext(checkCtx, `SELECT agent_token_hash FROM servers WHERE id=?`, serverID).Scan(&current); err != nil {
+			return false
+		}
+		return subtle.ConstantTimeCompare([]byte(hash), []byte(current)) == 1
+	}, true
+}
+
+func (s *ServerService) AuditResync(ctx context.Context, actorID, serverID int64, ip string) {
+	if err := s.audit.Log(ctx, &actorID, "resync", "server", &serverID, nil, ip); err != nil {
+		log.Error().Err(err).Int64("server_id", serverID).Msg("failed to audit configuration retry")
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -505,4 +609,64 @@ func scanServerRow(row serverScanner) (*models.Server, error) {
 	)
 	srv.HTTP2Enabled = http2 == 1
 	return &srv, err
+}
+
+func (s *ServerService) waitProvisionReady(ctx context.Context, id int64) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var desired, applied int64
+		var status string
+		err := s.db.QueryRowContext(ctx, `SELECT desired_revision,applied_revision,status FROM server_config_state WHERE server_id=?`, id).Scan(&desired, &applied, &status)
+		if err != nil && ctx.Err() == nil {
+			return fmt.Errorf("read agent configuration readiness: %w", err)
+		}
+		if err == nil && s.hub != nil && s.hub.IsOnline(id) && status == "applied" && desired == applied {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("agent did not authenticate and apply the desired configuration before the readiness deadline; inspect server configuration status")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *ServerService) ConfigureArtifacts(caddyPath, version string) {
+	s.caddyBinPath = caddyPath
+	s.version = version
+}
+
+func (s *ServerService) ConfigureArtifactCache(path string) { s.artifactCacheDir = path }
+
+func (s *ServerService) AgentCredentials(ctx context.Context, actorID *int64, id int64, ip string) (*agentconfig.Config, error) {
+	if id <= 1 {
+		return nil, fmt.Errorf("a remote server is required")
+	}
+	srv, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if srv == nil {
+		return nil, ErrServerNotFound
+	}
+	if run := s.GetProvisionRun(id); run != nil && !run.Done() {
+		return nil, ErrProvisioningInProgress
+	}
+	if err := agentconfig.ValidateURL(s.controllerURL); err != nil {
+		return nil, err
+	}
+	token, err := s.tokens.CreateForServer(ctx, id, actorID)
+	if err != nil {
+		return nil, err
+	}
+	s.hub.Disconnect(id)
+	if _, err := s.db.ExecContext(ctx, `UPDATE server_config_state SET desired_revision=desired_revision+1,status='queued',error='' WHERE server_id=?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE servers SET status='pending' WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	s.audit.Log(ctx, actorID, "rotate_agent_credentials", "server", &id, nil, ip)
+	return &agentconfig.Config{ControllerURL: s.controllerURL, Token: token, ServerID: id}, nil
 }

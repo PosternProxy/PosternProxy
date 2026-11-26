@@ -7,20 +7,20 @@ import (
 
 	"github.com/posternproxy/posternproxy/internal/caddy"
 	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/rs/zerolog/log"
 )
 
 // StreamHostService manages Layer-4 stream hosts in SQLite and Caddy.
 type StreamHostService struct {
-	db    *sql.DB
-	caddy *caddy.Client
-	sync  *CaddySyncService
-	audit *AuditService
+	db             *sql.DB
+	caddy          *caddy.Client
+	sync           *CaddySyncService
+	audit          *AuditService
+	managementPort int
 }
 
 // NewStreamHostService creates a StreamHostService backed by db.
 func NewStreamHostService(db *sql.DB, caddyClient *caddy.Client, audit *AuditService, sync *CaddySyncService) *StreamHostService {
-	return &StreamHostService{db: db, caddy: caddyClient, sync: sync, audit: audit}
+	return &StreamHostService{db: db, caddy: caddyClient, sync: sync, audit: audit, managementPort: 81}
 }
 
 // ── Input type ────────────────────────────────────────────────────────────────
@@ -103,6 +103,9 @@ func (s *StreamHostService) Create(ctx context.Context, callerID *int64, input C
 	}
 	defer tx.Rollback()
 
+	if err := s.validateListener(ctx, tx, input, 0); err != nil {
+		return nil, err
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO stream_hosts
 		  (server_id, incoming_port, forward_host, forward_port, protocol,
@@ -131,11 +134,8 @@ func (s *StreamHostService) Create(ctx context.Context, callerID *int64, input C
 	if err != nil {
 		return nil, err
 	}
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to apply stream host to Caddy")
-	}
-	s.audit.Log(ctx, callerID, "create", "stream_host", &id, map[string]any{"incoming_port": input.IncomingPort}, ip)
-	return host, nil
+	s.audit.HostChange(ctx, callerID, "create", "stream_host", id, nil, host, ip)
+	return host, syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *StreamHostService) Update(ctx context.Context, callerID *int64, id int64, input CreateStreamHostInput, ip string) (*models.StreamHost, error) {
@@ -147,24 +147,42 @@ func (s *StreamHostService) Update(ctx context.Context, callerID *int64, id int6
 		return nil, err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	if input.ServerID == 0 {
+		input.ServerID = existing.ServerID
+	}
+	if input.Protocol == "" {
+		input.Protocol = "tcp"
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := s.validateListener(ctx, tx, input, id); err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx, `
 		UPDATE stream_hosts SET
+		  server_id=?,
 		  incoming_port=?, forward_host=?, forward_port=?, protocol=?,
 		  tcp_sni_match=?, tcp_proxy_protocol=?, udp_timeout=?, updated_at=datetime('now')
 		WHERE id=?`,
-		input.IncomingPort, input.ForwardHost, input.ForwardPort, input.Protocol,
+		input.ServerID, input.IncomingPort, input.ForwardHost, input.ForwardPort, input.Protocol,
 		input.TCPSNIMatch, boolToInt(input.TCPProxyProtocol), input.UDPTimeout, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update stream host: %w", err)
 	}
-
-	host, _ := s.GetByID(ctx, id)
-	if err := s.pushToCaddy(ctx, host); err != nil {
-		log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to apply stream host to Caddy")
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
-	s.audit.Log(ctx, callerID, "update", "stream_host", &id, map[string]any{"incoming_port": input.IncomingPort}, ip)
-	return host, nil
+
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.audit.HostChange(ctx, callerID, "update", "stream_host", id, existing, host, ip)
+	return host, syncServers(ctx, s.sync, existing.ServerID, host.ServerID)
 }
 
 func (s *StreamHostService) Delete(ctx context.Context, callerID *int64, id int64, ip string) error {
@@ -175,72 +193,57 @@ func (s *StreamHostService) Delete(ctx context.Context, callerID *int64, id int6
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM stream_hosts WHERE id = ?", id); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	// Stream hosts live in apps.layer4.servers, keyed by StreamServerKey
-	l4Key := caddy.StreamServerKey(host)
-	s.syncAfterDelete(ctx, host.ServerID, l4Key)
-	s.audit.Log(ctx, callerID, "delete", "stream_host", &id, nil, ip)
-	return nil
+	s.audit.HostChange(ctx, callerID, "delete", "stream_host", id, host, nil, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 func (s *StreamHostService) SetEnabled(ctx context.Context, callerID *int64, id int64, enabled bool, ip string) error {
-	if _, err := s.db.ExecContext(ctx,
+	before, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if before == nil {
+		return fmt.Errorf("host not found")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if enabled {
+		if err := s.validateListener(ctx, tx, CreateStreamHostInput{ServerID: before.ServerID, IncomingPort: before.IncomingPort, Protocol: before.Protocol}, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
 		"UPDATE stream_hosts SET enabled=?, updated_at=datetime('now') WHERE id=?",
 		boolToInt(enabled), id,
 	); err != nil {
 		return fmt.Errorf("update enabled: %w", err)
 	}
-	host, _ := s.GetByID(ctx, id)
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	host, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if host == nil {
 		return fmt.Errorf("stream host not found")
-	}
-	l4Key := caddy.StreamServerKey(host)
-	if enabled {
-		if err := s.pushToCaddy(ctx, host); err != nil {
-			log.Error().Err(err).Int64("stream_host_id", id).Msg("failed to enable stream host in Caddy")
-		}
-	} else {
-		s.syncAfterDelete(ctx, host.ServerID, l4Key)
 	}
 	action := "enable"
 	if !enabled {
 		action = "disable"
 	}
-	s.audit.Log(ctx, callerID, action, "stream_host", &id, nil, ip)
-	return nil
-}
-
-func (s *StreamHostService) pushToCaddy(ctx context.Context, h *models.StreamHost) error {
-	if s.sync == nil {
-		return nil
-	}
-	if h.ServerID != 1 {
-		return s.sync.SyncServer(ctx, h.ServerID)
-	}
-	return s.sync.applyLocalOrResync(ctx, func() error {
-		srv := caddy.BuildStreamServer(h)
-		key := caddy.StreamServerKey(h)
-		if err := s.caddy.SetPath("apps/layer4/servers/"+key, srv); err != nil {
-			return fmt.Errorf("set layer4 server: %w", err)
-		}
-		return nil
-	})
-}
-
-func (s *StreamHostService) syncAfterDelete(ctx context.Context, serverID int64, l4Key string) {
-	if serverID != 1 {
-		if s.sync != nil {
-			if err := s.sync.SyncServer(ctx, serverID); err != nil {
-				log.Warn().Err(err).Int64("server_id", serverID).Msg("stream host: sync after delete failed")
-			}
-		}
-		return
-	}
-	if err := s.caddy.DeletePath("apps/layer4/servers/" + l4Key); err != nil {
-		log.Warn().Err(err).Str("l4_key", l4Key).Msg("stream host: caddy layer4 deletion failed")
-	}
+	s.audit.HostChange(ctx, callerID, action, "stream_host", id, before, host, ip)
+	return syncServers(ctx, s.sync, host.ServerID)
 }
 
 func validateStreamInput(input CreateStreamHostInput) error {
+	if input.Protocol != "" && input.Protocol != "tcp" && input.Protocol != "udp" && input.Protocol != "tcp+udp" {
+		return fmt.Errorf("protocol must be tcp, udp, or tcp+udp")
+	}
 	if input.IncomingPort < 1 || input.IncomingPort > 65535 {
 		return fmt.Errorf("incoming port must be between 1 and 65535")
 	}
@@ -281,4 +284,21 @@ func scanStreamHostRow(row scanner) (*models.StreamHost, error) {
 	h.TCPProxyProtocol = proxyProtocol == 1
 	h.Enabled = enabled == 1
 	return &h, nil
+}
+
+func (s *StreamHostService) ConfigureManagementPort(port int) { s.managementPort = port }
+func (s *StreamHostService) validateListener(ctx context.Context, tx *sql.Tx, input CreateStreamHostInput, exclude int64) error {
+	port := input.IncomingPort
+	if port == 80 || port == 443 || port == 2019 || (input.ServerID == 1 && port == s.managementPort) {
+		return fmt.Errorf("incoming port conflicts with a reserved HTTP, TLS, admin or management listener")
+	}
+	var count int
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM stream_hosts WHERE server_id=? AND incoming_port=? AND id<>? AND enabled=1 AND (protocol=? OR protocol='tcp+udp' OR ?='tcp+udp')`, input.ServerID, port, exclude, input.Protocol, input.Protocol).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("incoming port and protocol conflict with an enabled stream on this server")
+	}
+	return nil
 }

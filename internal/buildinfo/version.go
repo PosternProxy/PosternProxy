@@ -1,6 +1,10 @@
 package buildinfo
 
-import "runtime/debug"
+import (
+	"github.com/rs/zerolog"
+	"io"
+	"runtime/debug"
+)
 
 // Version returns a version string derived from VCS build info embedded by
 // the Go toolchain. If the binary was built outside a VCS checkout (or info
@@ -34,4 +38,9 @@ func Version() string {
 		return rev + dirty
 	}
 	return "dev"
+}
+
+func WriteVersion(w io.Writer, name, version string) {
+	logger := zerolog.New(w)
+	logger.Info().Str("version", version).Msg(name)
 }

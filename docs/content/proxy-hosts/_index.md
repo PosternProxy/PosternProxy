@@ -30,7 +30,7 @@ The **Add / Edit Proxy Host** modal has the following tabs:
 | **Locations** | Sub-path routing overrides |
 | **Health** | Active and passive health check settings |
 | **Security** | Access list, rate limiting |
-| **Errors** | Custom HTML for 404/502/503 responses |
+| **Errors** | Custom HTML for Caddy-generated 502/503 errors |
 | **Headers** | Request and response header injection |
 | **Advanced** | Raw Caddy JSON merged into the route |
 
@@ -47,7 +47,11 @@ The **Add / Edit Proxy Host** modal has the following tabs:
 
 ## Enable / disable
 
-Each proxy host can be toggled on or off without deleting it. When disabled, Caddy removes the route immediately; traffic returns a 404 until re-enabled.
+Each proxy host can be toggled without deleting it. After successful application,
+disabling removes its managed route. The response then depends on other matching
+routes and listeners; it is not guaranteed to be 404. Check
+[Configuration application status]({{< relref "/multi-server/configuration-status" >}})
+for rejected changes or offline agents.
 
 ## Sub-pages
 

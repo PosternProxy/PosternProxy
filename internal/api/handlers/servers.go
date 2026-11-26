@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agent"
@@ -29,7 +30,7 @@ func NewServerHandler(svc *services.ServerService, hub *agent.Hub, sync *service
 func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.svc.List(r.Context())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondServiceError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if servers == nil {
@@ -71,9 +72,10 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	srv, err := h.svc.Create(r.Context(), &claims.UserID, input, r.RemoteAddr)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	respondJSON(w, http.StatusCreated, srv)
 }
 
@@ -94,7 +96,7 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.UpdateCredentials(r.Context(), &claims.UserID, id, input, r.RemoteAddr); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	srv, _ := h.svc.GetByID(r.Context(), id)
@@ -113,7 +115,7 @@ func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Delete(r.Context(), &claims.UserID, id, r.RemoteAddr); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -176,10 +178,10 @@ func (h *ServerHandler) Reprovision(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.Reprovision(r.Context(), &claims.UserID, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, services.ErrProvisioningInProgress) {
-			respondError(w, http.StatusConflict, err.Error())
+			respondServiceError(w, http.StatusConflict, err)
 			return
 		}
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -241,16 +243,30 @@ func streamRun(w http.ResponseWriter, r *http.Request, run *services.ProvisionRu
 
 // Resync pushes the current Caddy config to a remote agent over its live WebSocket.
 func (h *ServerHandler) Resync(w http.ResponseWriter, r *http.Request) {
+	claims := requireClaims(w, r)
+	if claims == nil {
+		return
+	}
 	id, err := parseID(r)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	h.svc.AuditResync(r.Context(), claims.UserID, id, r.RemoteAddr)
 	if err := h.sync.SyncServer(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondServiceError(w, http.StatusInternalServerError, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+	state, err := h.sync.State(r.Context(), id)
+	if err != nil {
+		respondServiceError(w, http.StatusInternalServerError, err)
+		return
+	}
+	status := http.StatusAccepted
+	if state.Status == "applied" {
+		status = http.StatusOK
+	}
+	respondJSON(w, status, state)
 }
 
 // SetHTTP2 toggles the server-wide HTTP/2 setting and re-syncs Caddy so it takes
@@ -277,7 +293,7 @@ func (h *ServerHandler) SetHTTP2(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "server not found")
 			return
 		}
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondServiceError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := h.sync.SyncServer(r.Context(), id); err != nil {
@@ -327,7 +343,7 @@ func (h *ServerHandler) ResetJoin(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, services.ErrServerNotFound):
 			respondError(w, http.StatusNotFound, "server not found")
 		default:
-			respondError(w, http.StatusBadRequest, err.Error())
+			respondServiceError(w, http.StatusBadRequest, err)
 		}
 		return
 	}
@@ -337,22 +353,43 @@ func (h *ServerHandler) ResetJoin(w http.ResponseWriter, r *http.Request) {
 // ── WebSocket endpoint for agent connections ──────────────────────────────────
 
 // AgentConnect upgrades the connection to WebSocket for a remote agent.
-// The agent must supply its server_id and token as query parameters.
+// The agent supplies server_id in the URL and its token in Authorization.
 //
 // All failure cases return an identical 401 to prevent server ID enumeration.
 func (h *ServerHandler) AgentConnect(w http.ResponseWriter, r *http.Request) {
+	serverID, authorize, ok := h.authenticatedAgent(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	h.hub.ServeWS(serverID, w, r, authorize)
+}
+
+func (h *ServerHandler) VerifyAgent(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := h.authenticatedAgent(r); !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ServerHandler) authenticatedAgent(r *http.Request) (int64, func() bool, bool) {
 	serverIDStr := r.URL.Query().Get("server_id")
-	token := r.URL.Query().Get("token")
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	if r.URL.Query().Has("token") || len(r.Header.Values("Authorization")) != 1 || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return 0, nil, false
+	}
+	token := parts[1]
 
 	// ParseInt returning an error yields serverID == 0, which ValidateAgentToken
 	// safely rejects (no row + dummy bcrypt). No need for a separate branch.
 	serverID, _ := strconv.ParseInt(serverIDStr, 10, 64)
-	if !h.svc.ValidateAgentToken(r.Context(), serverID, token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	authorize, valid := h.svc.AgentAuthorization(r.Context(), serverID, token)
+	if !valid {
+		return 0, nil, false
 	}
 
-	h.hub.ServeWS(serverID, w, r)
+	return serverID, authorize, true
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -373,4 +410,23 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
+}
+
+func (h *ServerHandler) AgentCredentials(w http.ResponseWriter, r *http.Request) {
+	claims := requireClaims(w, r)
+	if claims == nil {
+		return
+	}
+	id, err := parseID(r)
+	if err != nil {
+		respondError(w, 400, "invalid id")
+		return
+	}
+	config, err := h.svc.AgentCredentials(r.Context(), &claims.UserID, id, r.RemoteAddr)
+	if err != nil {
+		respondServiceError(w, 400, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respondJSON(w, 200, config)
 }

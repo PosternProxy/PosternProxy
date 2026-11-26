@@ -5,10 +5,190 @@ All notable changes to PosternProxy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project intends to use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Keep text files, including PowerShell scripts, on LF across platforms to avoid
+  Git line-ending conversion warnings on Windows.
+
+## [0.1.4-beta] 2026-11-25
+
+- Invalidate agent transport credentials when their API token or owner authority
+  is revoked, and close connected agents after credential changes.
+- Export configuration tables and portable server mappings from one SQLite
+  snapshot so concurrent edits cannot produce inconsistent recovery archives.
+- Require the full CI suite before creating release drafts.
+
+- Include shared branding assets at their expected relative paths during Docker
+  frontend builds and allow an explicit Node heap limit on small build hosts.
+- Quote the Compose JWT-secret validation expression so its explanatory text
+  parses as valid YAML.
+- Fix Windows installer read/execute ACL encoding, verified with elevated native
+  filesystem permission tests.
+- Preserve the bootstrap Caddy admin listener address when applying configuration,
+  preventing Windows reload bind conflicts.
+- Add native Windows controller/agent service installation with separate virtual
+  accounts, protected DPAPI configuration, data-preserving reinstall/removal and
+  supervised Caddy shutdown.
+- Apply one reserved management-port rule to runtime startup and all native
+  installer configuration paths.
+- Retain native Linux amd64 releases alongside the added Linux arm64, Windows
+  amd64 and Docker targets.
+- Package Windows amd64 and Linux amd64/arm64 releases and add native service and
+  multiarch Docker/Compose qualification before publication.
+- Supervise both processes in Docker and persist Caddy storage in the data volume.
+- Document the Docker, native Windows service, and Linux amd64/arm64 install paths:
+  add a Docker getting-started guide and link the install methods from the
+  installation and Getting Started pages.
+
+- Expand browser acceptance coverage for encrypted backup/restore, real-agent
+  applied readiness, and non-localhost HTTPS session/CSRF behavior.
+
+- Apply explicit per-server Caddy trusted-proxy policies to visitor ACLs, rate
+  limits and canonical upstream client headers, including location routes.
+- Bound proxy request headers, header-read time, idle keepalive and upstream TLS
+  handshakes while preserving uploads, SSE and WebSockets.
+- Refuse to replace an empty or unreadable persisted controller encryption secret.
+- Bound certificate multipart uploads and update frontend dependencies to clear
+  the advisories identified during beta qualification.
+- Keep SSH diagnostics separate from architecture, privilege and version probe
+  output so noninteractive shell warnings do not break native agent provisioning.
+
+### Fixed
+
+- Enabling a TLS-passthrough host no longer rejects the whole Caddy
+  configuration. The generated fallthrough used a nonexistent `layer4.handlers.http`
+  module; non-passthrough HTTPS is now bridged to an internal loopback HTTPS
+  listener over PROXY protocol, preserving the real client IP. Qualified with a
+  live pinned-Caddy test that loads the full production config.
+- The TLS-passthrough HTTPS bridge no longer advertises HTTP/3. The bridged
+  HTTPS server offers only HTTP/1.1 and HTTP/2, so it cannot advertise the
+  private loopback bridge port as an unreachable QUIC endpoint.
+- Port 8443 is reserved for the TLS-passthrough bridge: the installer rejects it
+  as a management port, preventing a bind collision that otherwise made Caddy
+  reject the configuration when passthrough was enabled on the same host.
+- UDP stream hosts now forward to their upstream over UDP. Previously the
+  generated Layer4 proxy dialed the upstream over TCP regardless of protocol,
+  silently breaking UDP forwarding; qualified with a live pinned-Caddy UDP test.
+- Combined `tcp+udp` stream hosts now forward each transport to its own network.
+  Previously both listeners shared a single TCP upstream dial, so UDP traffic in
+  combined mode was sent over TCP.
+- Rejected settings edits no longer record attempted values in the audit log.
+  Unknown or secret-bearing keys (e.g. `api_key`) now have their values masked,
+  so a rejected bulk update cannot leak a secret into the audit record.
+- First-time controller installation prints the initial admin login after readiness,
+  using temporary private runtime configuration instead of service password logs.
+  Reinstalling preserves existing passwords.
+
+- Native installers normalize the embedded Caddy verification script to Unix
+  line endings, fixing Bash failures in Linux binaries built on Windows.
+- Custom certificate uploads validate PEM, key pairing, server usage, domains
+  and validity before storage, and save expiry metadata. Private source material
+  is encrypted; per-server synchronization excludes unrelated certificates.
+- Certificate activation stages immutable runtime pairs for Caddy's dedicated
+  read-only group and retains the last applied material if replacement fails.
+- Reviewed the documentation against the current UI, configuration, routes and
+  services. Corrected agent packaging/provisioning guidance, log and password
+  recovery commands, API CSRF examples, settings behavior, history retention,
+  forwarding and certificate/audit claims; documented remaining beta limitations.
+- Installation docs now show bundle extraction, the extracted `posternproxy`
+  filename, and `--assets-dir .`, with a separate path for individual release binaries.
+- Remote SSH installation uses verified prebuilt Linux artifacts and the native
+  agent installer, passes credentials in private files, preserves firewall rules,
+  and waits for authenticated acknowledgement of the current configuration.
+- Settings display actual runtime values and reject ineffective changes. Audit
+  access is admin-only, with additional redacted management events.
+- Stream listener conflicts are rejected before saving. Dead hosts persist
+  certificate and access-list selections; redirect/dead routes enforce IP lists.
+- Release version stamping now survives process initialization; both binaries expose a version command.
+- Caddy is updated to the patched 2.11.9 build and uses the pinned Go 1.26.11 toolchain across build paths.
+- Controller containers now include the agent executable for SSH provisioning.
+- New controller installations use a fail2ban filter matching the actual failed
+  login request logs, with structured JSON logging enabled in the service.
+
+### Added
+
+- Admin sign-in and sidebar use the PosternProxy logo. Default proxy error and
+  parked-domain pages include matching light/dark logos and automatically follow
+  the visitor's system theme without external image requests or JavaScript.
+
+- Parked domains support an explicit HTTP-only mode without HTTPS routes or
+  certificate distribution. Existing parked domains keep their HTTPS setting.
+- Proxy, redirect and parked host lists share expandable TLS checks, alias results,
+  expiry/check times and guidance to Caddy's actual ACME issuance logs. Resource
+  IDs cannot collide across host types, and remote checks are labeled unavailable.
+
+- `posternproxy-agent install --config-file` shares native service setup with the
+  controller installer. Manual server enrollment and credential rotation display
+  credentials once and disconnect replaced identities.
+- Passphrase-encrypted version 2 recovery archives include custom certificate
+  bytes and credential-free server descriptions, with explicit remote mapping or
+  unenrolled creation. Restore separates database commit from configuration apply.
+- Live custom TLS and cross-key clean recovery acceptance tests.
+- `posternproxy install` installs the controller, release-matched Caddy and agent,
+  hardened systemd services, fail2ban, and security updates. Assets are verified
+  before system changes; local assets support source builds and offline delivery.
+- Tagged-release packaging creates draft Linux amd64/arm64 releases with SHA-256
+  manifests. Source build scripts also write manifests for local installation.
+
+### Changed
+
+- Go builds require Go 1.26+, with a patched toolchain preference; SSH cryptography dependencies and the WebSocket masking implementation are updated to fix reachable vulnerability findings.
+- Controller installation no longer requires transferring shell scripts or a
+  Caddy build helper. The shell entry point delegates to the Go subcommand.
+  Existing configuration is preserved; UFW setup is opt-in, requires the actual
+  SSH port, and preserves existing rules. SSH configuration is left intact.
+
+## [0.1.3-beta] 2026-11-15
+
+This release remains in beta. Upgrade the controller and agents together.
+In-place upgrades from published earlier beta databases are still unqualified.
+See the [beta upgrade and recovery guide](https://docs.posternproxy.com/administration/upgrading/).
+
+### Added
+
+- Release qualification foundations: frozen schema baseline tests, a disposable
+  browser smoke harness, and live Caddy acceptance/CI checks.
+- Persistent desired/applied configuration revisions, correlated agent results,
+  automatic reconciliation on reconnect/restart, and a configuration status
+  notice with admin retry. Restore reports application state separately from
+  saved data. Live acceptance covers two outbound agents and controller restart.
+
+### Fixed
+
+- Access lists no longer block configuration generation on SQLite's single
+  connection, and list changes trigger configuration synchronization.
+- Host create/edit/disable/delete now report rejected configuration application
+  while retaining saved desired state for retry; host moves synchronize both
+  the old and new server. Host audit entries include safe before/after fields.
+- Configuration history snapshots are encrypted at rest, including legacy
+  snapshots protected during startup, and history listings omit their contents.
+- Management token scopes come from validated credentials and cannot be elevated
+  through headers or token minting. Account/password changes revoke existing
+  credentials; sessions rotate refresh tokens and revoke on logout.
+- Forwarding headers are accepted only from configured trusted proxy CIDRs.
+  Agent authentication uses Authorization, and structured request logs omit
+  credential-bearing URLs and headers. Controller and agents must be upgraded
+  together; older query-token agents are rejected.
+
+### Changed
+
+- Traffic Forwarding now uses Caddy L4 stream hosts. The legacy iptables,
+  socat, and `/api/port-forwards` paths were removed.
+- Build scripts, Docker images, installers, and SSH provisioning share pinned
+  Caddy, L4, rate-limit, and xcaddy versions. Installers reject incompatible
+  existing Caddy builds, including builds missing required plugins.
+- Documented the beta schema baseline and recovery limits; corrected unsupported
+  Basic Auth, backup portability, and security rate-limit claims.
+- Updated the docs site for scoped API tokens, session revocation, trusted
+  proxies, coordinated agent upgrades, pinned Caddy provisioning, and rollback.
+
 ## [0.1.2-beta] 2026-06-20
 
 ### Added
 
+- A firewall reminder in the Traffic Forwarding UI and docs: each forwarded port
+  must be opened in the host firewall (ufw) and any upstream/cloud firewall, which
+  PosternProxy does not manage.
 - HTTP/2 is now a per-server setting (the Local controller and each remote managed
   server can differ), toggled on the Servers page. It replaces the old per-host
   HTTP/2 toggle, which never did anything (HTTP/2 is a property of the shared HTTPS
@@ -91,6 +271,10 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The **Docker** deployment option is hidden in the Add Remote Server wizard;
+  remote servers are provisioned via systemd only. Docker agent provisioning
+  isn't ready yet and would fail. The `deployment_type` field still defaults to
+  `systemd`, and the backend keeps the `docker` code path for when it's ready.
 - The management UI favicon now uses the PosternProxy mark instead of the
   default Vue icon.
 - Caddy sync failures in the host services are now logged as structured warnings
@@ -98,6 +282,10 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The **iptables** and **socat** port-forwarding methods, end-to-end (controller,
+  agent, `internal/portforward`, the `port_forwards` table, API routes, and docs).
+  Traffic Forwarding is now Caddy Layer 4 only — it covers every real-world
+  TCP/UDP forwarding case and removes the OS-level privilege/firewall complexity.
 - The per-proxy-host **WebSocket Support** and **HTTP/2** toggles, which were
   no-ops. Removed end-to-end: UI controls, model fields, and the
   `proxy_hosts.http2_support` / `proxy_hosts.websocket_support` columns (folded
@@ -172,5 +360,6 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 - Commercial licensing docs updated with real contact email.
 - Install script post-install message now correctly directs users to service logs for the generated password.
 
-[Unreleased]: https://github.com/posternproxy/posternproxy/commits/master
+[Unreleased]: https://github.com/PosternProxy/PosternProxy/compare/v0.1.3-beta...master
+[0.1.3-beta]: https://github.com/PosternProxy/PosternProxy/releases/tag/v0.1.3-beta
 [0.1.0-beta.1]: https://github.com/posternproxy/posternproxy/releases/tag/v0.1.0-beta.1

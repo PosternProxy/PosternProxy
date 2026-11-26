@@ -19,8 +19,8 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': { target: 'http://localhost:81', changeOrigin: true },
-      '/ws': { target: 'http://localhost:81', ws: true, changeOrigin: true },
+      '/api': { target: process.env.POSTERNPROXY_DEV_API ?? 'http://localhost:81', changeOrigin: true },
+      '/ws': { target: process.env.POSTERNPROXY_DEV_API ?? 'http://localhost:81', ws: true, changeOrigin: true },
     },
   },
 })

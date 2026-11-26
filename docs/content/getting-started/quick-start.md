@@ -1,6 +1,6 @@
 ---
 title: Quick Start
-weight: 2
+weight: 4
 ---
 
 # Quick Start
@@ -13,22 +13,22 @@ Open `http://<server-ip>:81` in your browser.
 
 <!-- TODO: Screenshot — login page -->
 
-On first boot, PosternProxy generates a random admin password and prints it to its log file. Retrieve it before logging in:
+For a native installation, use the initial administrator login printed by
+`posternproxy install` after startup succeeds. The installer does not put that
+password in the service log. Reinstalling preserves existing credentials.
 
-```bash
-grep -A6 "INITIAL SETUP" /var/log/posternproxy/posternproxy.log
-```
+For Docker, the first-boot banner is available through `docker logs posternproxy`.
 
 Log in with:
 - **Email:** `admin@posternproxy.local` (or the value of `POSTERNPROXY_ADMIN_EMAIL`)
-- **Password:** the generated password from the startup banner above
+- **Password:** the initial password displayed by the installer (or container startup banner)
 
 Immediately navigate to **Users → (your account) → Change Password** and set a strong password.
 
-{{< hint info >}}
+{{% hint info %}}
 **Can't find the password?** Run `reset-password` on the server (as the `posternproxy` user, with the config loaded) to generate and print a new one without restarting the service:
 `sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; /usr/local/bin/posternproxy reset-password'`
-{{< /hint >}}
+{{% /hint %}}
 
 ## 2. Add your first proxy host
 
@@ -48,7 +48,8 @@ Proxy hosts route incoming domain traffic to upstream services.
 
 <!-- TODO: Screenshot — Add Proxy Host modal, Details tab filled in -->
 
-Caddy will immediately start routing traffic for your domain.
+After saving, check the configuration notice for **Applied** status, then verify
+traffic. A saved host can remain queued for an offline agent or fail to apply.
 
 ## 3. Verify traffic is flowing
 
@@ -65,7 +66,7 @@ You should see a `200 OK` (or whatever your upstream returns).
 
 Public domains with Force HTTPS get a Let's Encrypt certificate automatically — no
 action needed here. For a wildcard or a private/internal domain, go to
-**Certificates → Add Certificate** and upload your own certificate and key, then
+**Custom Certs → Upload Certificate** and upload your own certificate and key, then
 select it on the host's SSL tab.
 
 See [Certificates]({{< relref "/certificates" >}}) for full details.
@@ -92,4 +93,5 @@ To use the REST API from scripts or CI/CD:
 curl -H "Authorization: Bearer <token>" http://your-server:81/api/proxy-hosts
 ```
 
-See [Access Tokens]({{< relref "/access-tokens" >}}) for the full API reference approach.
+See [Access Tokens]({{< relref "/access-tokens" >}}) for token permissions, routes,
+and the CSRF cookie/header required for write requests.

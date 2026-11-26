@@ -1,6 +1,6 @@
 # PosternProxy
 
-> **Status: Beta** — Feature-complete for core use cases, under active testing. APIs and configuration may change before 1.0.
+> **Status: Beta** — Under active development and testing. Installation, provisioning, certificate access, and recovery qualification remain open. APIs and configuration may change before 1.0.
 
 **Read the Docs @  [docs.posternproxy.com](https://docs.posternproxy.com)**
 
@@ -13,10 +13,10 @@ A self-hosted reverse proxy manager built on [Caddy](https://caddyserver.com). P
 - **Stream hosts** — TCP/UDP stream proxy and TLS passthrough via Caddy L4
 - **Dead hosts** — return 404 for parked domains
 - **SSL certificates** — automatic Let's Encrypt (HTTP-01) or upload your own PEM files
-- **Access lists** — IP allowlist/denylist and HTTP Basic Auth per host
-- **Port forwarding** — iptables/socat rules managed from the UI
+- **Access lists** — IP allowlist/denylist per host
+- **Traffic forwarding** — raw TCP/UDP forwarding to any backend via Caddy Layer 4
 - **Multi-server** — manage remote servers via a lightweight agent connected over WebSocket
-- **Audit log** — every change recorded with actor, IP, and before/after snapshot
+- **Audit log** — recorded actions with actor and IP; host changes include safe before/after fields
 - **Config history** — roll back any proxy host to a previous configuration
 - **Nginx import** — migrate an existing nginx config
 
@@ -43,7 +43,7 @@ PosternProxy delegates TLS termination and routing to Caddy — it does not incl
 
 For internal / homelab use where hosts are not directly internet-exposed, no additional layer is typically needed.
 
-See [SECURITY.md](SECURITY.md) for the vulnerability reporting process and a full list of hardening measures applied by the install script.
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting process and installer hardening measures.
 
 ---
 
@@ -55,7 +55,14 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting process and a ful
 # Controller
 cd docker
 cp .env.example .env   # edit .env with your JWT secret
-docker compose up -d
+# For direct HTTP access to port 81, explicitly disable Secure cookies:
+cat > docker-compose.http.yml <<'EOF'
+services:
+  posternproxy:
+    environment:
+      POSTERNPROXY_BEHIND_TLS_PROXY: "false"
+EOF
+docker compose -f docker-compose.yml -f docker-compose.http.yml up -d
 ```
 
 ```bash
@@ -66,22 +73,43 @@ docker compose -f docker-compose.agent.yml up -d
 
 The UI is at `http://<server-ip>:81`. On first boot a random admin password is printed to the container logs — check `docker logs posternproxy`.
 
+For management access over HTTPS behind a TLS proxy, use
+`POSTERNPROXY_BEHIND_TLS_PROXY=true` instead. The default Compose file does not
+forward this variable from `.env`, so set it through a Compose override. Configure
+the agent's controller URL, token and registered server ID in its environment
+before starting the agent Compose service.
+
 ### Deploy from release binaries
 
 ```bash
-# 1. Download posternproxy, posternproxy-agent, and caddy for your architecture
-#    from https://github.com/PosternProxy/PosternProxy/releases/
-#    (rename to the bare names if the assets carry a platform suffix)
-
-# 2. Copy the binaries + install script into one directory on the server
-scp posternproxy posternproxy-agent caddy install.sh root@your-server:/tmp/posternproxy/
-
-# 3. Install (as root)
-ssh root@your-server
-bash /tmp/posternproxy/install.sh
+# For Linux amd64 (use the arm64 archive on ARM servers):
+tar -xzf posternproxy-linux-amd64.tar.gz
+chmod +x posternproxy
+sudo ./posternproxy install --assets-dir .
 ```
 
-The install script installs the shipped Caddy, creates system users, generates secrets, installs hardened systemd services, and configures UFW / fail2ban / unattended upgrades. After install the UI is at `http://<server-ip>:81`.
+The archive contains `posternproxy`, `posternproxy-agent`, `caddy`, and
+`checksums.txt`. The extracted controller is named `posternproxy`, without a
+platform suffix. `--assets-dir .` uses the bundled Caddy and agent rather than
+downloading release assets, so it also works with unreleased builds.
+
+Windows amd64 uses a zip bundle and native service installation. See the
+[Windows service guide](docs/content/getting-started/windows.md). Release targets
+are native Linux amd64 and arm64, Windows amd64, and Docker amd64/arm64.
+
+The installer verifies checksums, architecture, and Caddy plugins, then installs
+hardened systemd services, fail2ban, and unattended security updates. No scripts or
+Go toolchain are needed on the server. The UI is at `http://<server-ip>:81`.
+
+Individual controller binaries from the [release page](https://github.com/PosternProxy/PosternProxy/releases/)
+also support downloading their matching dependencies automatically; see the
+[installation guide](docs/content/getting-started/installation.md) for that path.
+
+Existing configuration and firewall rules are preserved. To add UFW rules and
+enable it, explicitly pass `--configure-firewall --ssh-port 22` with your actual
+SSH port. See the [installation guide](docs/content/getting-started/installation.md)
+for offline installation and other options. This command is available in builds
+containing the new installer; older releases still require their original setup.
 
 Prefer to build it yourself? See [Full production build](#full-production-build-with-embedded-frontend) below, or the [Building from Source](docs/content/getting-started/building-from-source.md) guide.
 
@@ -93,7 +121,7 @@ Prefer to build it yourself? See [Full production build](#full-production-build-
 
 | Tool | Version |
 |---|---|
-| Go | 1.25+ |
+| Go | 1.26+ |
 | Node.js | 20.19+ or 22.12+ |
 | npm | included with Node |
 | Caddy | built with `caddy-l4` and `caddy-ratelimit` plugins |
@@ -101,11 +129,9 @@ Prefer to build it yourself? See [Full production build](#full-production-build-
 ### 1. Install Caddy (with required plugins)
 
 ```bash
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-xcaddy build \
-    --with github.com/mholt/caddy-l4 \
-    --with github.com/mholt/caddy-ratelimit \
-    --output ./caddy
+. internal/caddybuild/build.sh
+build_caddy ./caddy
+verify_caddy ./caddy
 ./caddy run
 ```
 
@@ -151,6 +177,8 @@ export POSTERNPROXY_CADDY_API=http://localhost:2019
 export POSTERNPROXY_CERT_DIR=data/certs
 # Required for dev: allow the Vite dev server origin so CORS works correctly
 export POSTERNPROXY_ALLOWED_ORIGINS=http://localhost:3000
+# The Vite development UI uses HTTP:
+export POSTERNPROXY_BEHIND_TLS_PROXY=false
 # Set a stable secret so sessions survive backend restarts
 export POSTERNPROXY_JWT_SECRET=dev-secret-change-me
 ```
@@ -167,7 +195,10 @@ The `data/` directory is created automatically on first run.
 make build
 ```
 
-Builds `posternproxy` and `posternproxy-agent` for the current platform with version info embedded. Re-uses whatever frontend is already in `internal/ui/dist` — will fail if no frontend has been built yet.
+Builds `posternproxy` and `posternproxy-agent` for the current platform with version
+info embedded. It reuses `internal/ui/dist`, including any placeholder or stale
+UI files; use the full build for a deployable frontend. It does not build Caddy
+or create a checksum manifest.
 
 ### Full production build (with embedded frontend)
 
@@ -185,7 +216,11 @@ bash scripts/build.sh
 .\scripts\build.ps1 -GoOS linux -GoArch arm64   # override target
 ```
 
-Both scripts build the Vue frontend, embed it via `//go:embed`, and compile both binaries with the version string from `git describe --tags`.
+Both scripts build and embed the Vue frontend, compile the controller and agent,
+build the pinned custom Caddy, and write `checksums.txt`. Linux/macOS outputs are
+in the repository root; PowerShell outputs are in `bin/`. The supplied archive
+contains all four files. The agent is a separate executable, included in the
+same build and bundle; it is not embedded inside the controller.
 
 Run `make help` for additional developer targets.
 
@@ -198,14 +233,20 @@ All settings are environment variables. In production they live in `/etc/postern
 | Variable | Default | Description |
 |---|---|---|
 | `POSTERNPROXY_LISTEN` | `:81` | Management UI listen address |
+| `POSTERNPROXY_DATA_DIR` | `data` | Data/secret directory; the installer sets `/var/lib/posternproxy` |
 | `POSTERNPROXY_DB_PATH` | `data/posternproxy.db` | SQLite database path |
 | `POSTERNPROXY_JWT_SECRET` | *(generated)* | JWT signing secret — set a stable value in production |
 | `POSTERNPROXY_CADDY_API` | `http://localhost:2019` | Caddy Admin API URL |
 | `POSTERNPROXY_CERT_DIR` | `data/certs` | Directory for uploaded custom certificates |
 | `POSTERNPROXY_CONTROLLER_URL` | *(empty)* | WebSocket URL advertised to agents (e.g. `http://10.0.0.1:81`) |
 | `POSTERNPROXY_AGENT_BIN` | *(empty)* | Path to `posternproxy-agent` binary used during server provisioning |
+| `POSTERNPROXY_BEHIND_TLS_PROXY` | `true` | Secure cookies; set `false` for an HTTP-only management UI |
+| `POSTERNPROXY_ALLOWED_ORIGINS` | *(empty)* | Comma-separated allowed browser origins |
+| `POSTERNPROXY_TRUSTED_PROXIES` | *(empty)* | Trusted management forwarding-proxy CIDRs |
+| `POSTERNPROXY_CADDY_TRUSTED_PROXIES` | *(empty)* | JSON object mapping managed server IDs to explicit trusted proxy CIDRs; separate from management trust |
+| `POSTERNPROXY_LOG_FORMAT` | Console | `json` for structured output; enabled in the installed service |
 | `POSTERNPROXY_ADMIN_EMAIL` | `admin@posternproxy.local` | Initial admin email (first boot only) |
-| `POSTERNPROXY_ADMIN_PASSWORD` | *(generated)* | Initial admin password (first boot only; printed to logs) |
+| `POSTERNPROXY_ADMIN_PASSWORD` | *(generated)* | Initial admin password (first boot only; native install prints it in the terminal) |
 
 > **Important:** `POSTERNPROXY_JWT_SECRET` must be stable across restarts. If unset, a random secret is persisted to `data/secret.key` on first boot. The JWT secret also derives the AES-256 key used to encrypt stored SSH credentials — changing it invalidates all encrypted data.
 
@@ -213,18 +254,30 @@ All settings are environment variables. In production they live in `/etc/postern
 
 ## Multi-server (agent)
 
-Remote servers run `posternproxy-agent`, which makes an outbound WebSocket connection to the controller. No inbound ports beyond 80 and 443 are needed on the remote server.
+Remote servers run the included `posternproxy-agent`, which makes an outbound
+WebSocket connection to the controller. The controller installer places it at
+`/usr/local/bin/posternproxy-agent` for SSH uploads; it does not start a local
+agent service. Each remote node needs the agent and Caddy built for that node's
+OS/CPU, but no controller process. Open the node's actual proxy/forwarding ports
+and SSH port as needed; the agent connection needs no inbound listener.
 
-The easiest way to add a remote server is via the UI: go to **Servers → Add Server**, fill in SSH credentials, and click **Provision**. PosternProxy will SSH in and set everything up automatically.
-
-To run the agent manually:
+The **Servers -> Add Server** wizard supports automatic SSH installation and
+manual enrollment. SSH installation uploads prebuilt agent/Caddy artifacts,
+preserves the firewall, and waits for authenticated configuration application.
+Manual enrollment displays one-time JSON credentials. From a remote node's
+extracted matching archive:
 
 ```bash
-export POSTERNPROXY_CONTROLLER_URL=http://your-controller:81
-export POSTERNPROXY_AGENT_TOKEN=<token-from-ui>
-export POSTERNPROXY_SERVER_ID=<id-from-ui>
-./posternproxy-agent
+chmod 600 agent.json
+chmod +x posternproxy-agent
+sudo ./posternproxy-agent install --config-file agent.json --assets-dir .
+rm agent.json
 ```
+
+Set `POSTERNPROXY_CONTROLLER_URL` on the controller first. The agent is included
+in the archive as a separate executable; no separate package is needed. See the
+[provisioning guide](docs/content/multi-server/provisioning.md) for prerequisites,
+credential rotation, cross-architecture assets and readiness checks.
 
 ---
 
@@ -280,4 +333,4 @@ PosternProxy is licensed under the **GNU Affero General Public License v3 (AGPLv
 
 See [LICENSE](LICENSE) for the full license text and [LICENSING.md](LICENSING.md) for commercial options.
 
-**Find out More @ [www.posternproxy.com](https://www.posternproxy.com**
+**Find out more at [www.posternproxy.com](https://www.posternproxy.com).**

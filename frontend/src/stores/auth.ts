@@ -14,6 +14,17 @@ export const useAuthStore = defineStore('auth', () => {
   // router guard fires for the initial nav and the first API request fires
   // from a component mount at roughly the same time).
   let restorePromise: Promise<boolean> | null = null
+  let refreshPromise: Promise<string> | null = null
+
+  function refreshSession(): Promise<string> {
+    if (!refreshPromise) {
+      refreshPromise = authApi.refresh().then(({ access_token }) => {
+        setToken(access_token)
+        return access_token
+      }).finally(() => { refreshPromise = null })
+    }
+    return refreshPromise
+  }
 
   const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
@@ -45,8 +56,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (restorePromise) return restorePromise
     restorePromise = (async () => {
       try {
-        const { access_token } = await authApi.refresh()
-        setToken(access_token)
+        await refreshSession()
         return true
       } catch {
         return false
@@ -80,6 +90,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     fetchUser,
     tryRestore,
+    refreshSession,
     logout,
     clearSession,
   }

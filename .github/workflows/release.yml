@@ -1,0 +1,142 @@
+name: Release candidates
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
+
+  windows:
+    runs-on: windows-latest
+    env:
+      POSTERNPROXY_BUILD_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-test' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test and vet
+        run: |
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build native Windows bundle
+        run: ./scripts/build.ps1 -GoOS windows -GoArch amd64
+      - name: Qualify Windows service install, reinstall, agent, TLS and removal
+        run: ./scripts/windows-service-smoke.ps1 -AssetsDir ./bin -Version $env:POSTERNPROXY_BUILD_VERSION -DisposableHost
+      - name: Package Windows binaries
+        run: |
+          New-Item -ItemType Directory -Path release | Out-Null
+          foreach ($name in @('posternproxy', 'posternproxy-agent', 'caddy')) {
+            Copy-Item -LiteralPath "bin/$name.exe" -Destination "release/$name-windows-amd64.exe"
+          }
+          Compress-Archive -LiteralPath bin/posternproxy.exe,bin/posternproxy-agent.exe,bin/caddy.exe,bin/checksums.txt -DestinationPath release/posternproxy-windows-amd64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-amd64
+          path: release/*
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      POSTERNPROXY_BUILD_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-test' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test, race and vet on native Linux
+        run: |
+          go mod verify
+          go test ./...
+          go test -race ./...
+          go vet ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Build native Linux bundle
+        env:
+          GOARCH: ${{ matrix.arch }}
+        run: bash scripts/build.sh
+      - name: Test pinned traffic and recovery
+        env:
+          POSTERNPROXY_TEST_CADDY: ${{ github.workspace }}/caddy
+          POSTERNPROXY_TEST_AGENT: ${{ github.workspace }}/posternproxy-agent
+        run: go test -tags=integration -count=1 ./internal/caddy ./internal/services
+      - name: Qualify native controller and agent services
+        run: |
+          private_log="$RUNNER_TEMP/posternproxy-install.log"
+          umask 077
+          sudo ./posternproxy install --assets-dir "$GITHUB_WORKSPACE" --port 18181 > "$private_log" 2>&1
+          sudo python3 scripts/qualify-native-controller.py --assets-dir "$GITHUB_WORKSPACE"
+          sudo systemctl stop posternproxy
+          trap 'sudo systemctl start posternproxy' EXIT
+          sudo python3 scripts/qualify-native-agent.py --assets-dir "$GITHUB_WORKSPACE"
+      - name: Package Linux binaries
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir release
+          for binary in posternproxy posternproxy-agent caddy; do
+            cp "$binary" "release/$binary-linux-$RELEASE_ARCH"
+          done
+          tar -czf "release/posternproxy-linux-$RELEASE_ARCH.tar.gz" posternproxy posternproxy-agent caddy checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: release/*
+
+  docker:
+    uses: ./.github/workflows/docker-qualification.yml
+
+  package:
+    if: github.event_name == 'push'
+    needs: [quality, windows, linux, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+      - name: Write release checksums
+        working-directory: release
+        run: sha256sum posternproxy-* caddy-* > checksums.txt
+      - name: Create draft release after qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release/* --verify-tag --draft --title "$RELEASE_TAG" --generate-notes "${flags[@]}"

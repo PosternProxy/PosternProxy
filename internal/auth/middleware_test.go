@@ -181,6 +181,7 @@ func TestRequireScope_HasScope(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Token-Scope", "read,write")
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &Claims{CredentialKind: "api_token", Scopes: []string{"read"}}))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -204,13 +205,13 @@ func TestRequireScope_MissingScope(t *testing.T) {
 	}
 }
 
-func TestRequireScope_NoHeader_Passes(t *testing.T) {
+func TestRequireScope_SessionWithoutHeader_Passes(t *testing.T) {
 	handler := RequireScope("write")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
-	// No X-Token-Scope header — JWT session, always passes.
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &Claims{CredentialKind: "session"}))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 

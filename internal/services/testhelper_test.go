@@ -9,7 +9,7 @@ import (
 	"github.com/posternproxy/posternproxy/internal/database"
 )
 
-// testDB opens a fresh in-memory SQLite database with all migrations applied.
+// testDB opens an isolated SQLite database with all migrations applied.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -20,9 +20,8 @@ func testDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// nullCaddy returns a Caddy client that will fail all HTTP calls gracefully.
-// Services treat Caddy push failures as non-fatal warnings, so tests still
-// exercise the full DB path.
+// Storage tests omit synchronization; application tests supply an active sync
+// service and verify Caddy failures separately.
 func nullCaddy() *caddy.Client {
 	return caddy.NewClient("http://localhost:0")
 }

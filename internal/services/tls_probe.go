@@ -4,57 +4,51 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// TLS probe states for a host that is expected to serve HTTPS.
-//
-//	"valid"   — Caddy presents a non-expired certificate that matches the domain.
-//	"pending" — :443 answers but the presented cert doesn't match yet (ACME in
-//	            progress, DNS not pointed, or a placeholder/default cert).
-//	"failed"  — no HTTPS response, or the cert is expired.
+// Probe states describe observed TLS readiness. A mismatch uses "pending" for
+// API compatibility; it does not establish that an ACME order is in progress.
 const (
 	TLSProbeValid   = "valid"
 	TLSProbePending = "pending"
 	TLSProbeFailed  = "failed"
 )
 
-// TLSProbeStatus is the result of one probe against the local Caddy HTTPS
-// listener for a single proxy host's primary domain.
+// TLSProbeStatus summarizes the local Caddy TLS checks for one managed host.
 type TLSProbeStatus struct {
-	HostID    int64      `json:"host_id"`
-	Domain    string     `json:"domain"`
-	Status    string     `json:"status"`
-	Detail    string     `json:"detail,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CheckedAt time.Time  `json:"checked_at"`
+	ResourceType string           `json:"resource_type"`
+	ServerID     int64            `json:"server_id"`
+	Domains      []TLSProbeDomain `json:"domains"`
+	HostID       int64            `json:"host_id"`
+	Domain       string           `json:"domain"`
+	Status       string           `json:"status"`
+	Detail       string           `json:"detail,omitempty"`
+	ExpiresAt    *time.Time       `json:"expires_at,omitempty"`
+	CheckedAt    time.Time        `json:"checked_at"`
 }
 
-// TLSProbeService periodically completes a TLS handshake against the local Caddy
-// HTTPS listener (SNI = each host's domain) and records whether Caddy is serving
-// a usable certificate. This is the ground-truth signal for "is HTTPS working for
-// this host", independent of Caddy's internal ACME state — it self-heals to
-// "valid" the moment a certificate is obtained.
-//
-// Only local (server_id=1) hosts that are expected to serve HTTPS are probed:
-// SSL-forced or certificate-assigned, non-passthrough, non-HTTP-only.
+// TLSProbeService checks serving certificates for local proxy, redirect and
+// parked hosts. Its results describe TLS readiness, not ACME order state.
 type TLSProbeService struct {
 	db   *sql.DB
 	addr string // local Caddy HTTPS listener, e.g. "127.0.0.1:443"
 
 	mu       sync.RWMutex
-	statuses map[int64]TLSProbeStatus
+	statuses map[string]TLSProbeStatus
 }
 
 func NewTLSProbeService(db *sql.DB, addr string) *TLSProbeService {
 	if addr == "" {
 		addr = "127.0.0.1:443"
 	}
-	return &TLSProbeService{db: db, addr: addr, statuses: make(map[int64]TLSProbeStatus)}
+	return &TLSProbeService{db: db, addr: addr, statuses: make(map[string]TLSProbeStatus)}
 }
 
 // Start launches the background polling loop: probe immediately, then every interval.
@@ -80,55 +74,89 @@ func (s *TLSProbeService) Statuses() []TLSProbeStatus {
 	return out
 }
 
+type TLSProbeDomain struct {
+	Domain    string     `json:"domain"`
+	Status    string     `json:"status"`
+	Detail    string     `json:"detail,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+type tlsTarget struct {
+	ID           int64
+	ResourceType string
+	Domains      []string
+}
+
 func (s *TLSProbeService) poll() {
-	hosts, err := s.httpsHosts()
+	hosts, err := s.httpsTargets()
 	if err != nil {
 		log.Warn().Err(err).Msg("tls probe: failed to load hosts")
 		return
 	}
-
-	now := time.Now()
-	next := make(map[int64]TLSProbeStatus, len(hosts))
-	for id, domain := range hosts {
-		st := s.probe(domain)
-		st.HostID = id
-		st.Domain = domain
-		st.CheckedAt = now
-		next[id] = st
+	next := make(map[string]TLSProbeStatus, len(hosts))
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	slots := make(chan struct{}, 8)
+	for _, host := range hosts {
+		slots <- struct{}{}
+		workers.Add(1)
+		go func(host tlsTarget) {
+			defer workers.Done()
+			defer func() { <-slots }()
+			status := TLSProbeStatus{HostID: host.ID, ResourceType: host.ResourceType, ServerID: 1, Domain: host.Domains[0], Status: TLSProbeValid, CheckedAt: time.Now()}
+			for _, domain := range host.Domains {
+				name := domain
+				if strings.HasPrefix(name, "*.") {
+					name = "tls-check." + strings.TrimPrefix(name, "*.")
+				}
+				result := s.probe(name)
+				status.Domains = append(status.Domains, TLSProbeDomain{Domain: domain, Status: result.Status, Detail: result.Detail, ExpiresAt: result.ExpiresAt})
+				if result.ExpiresAt != nil && (status.ExpiresAt == nil || result.ExpiresAt.Before(*status.ExpiresAt)) {
+					status.ExpiresAt = result.ExpiresAt
+				}
+				if result.Status == TLSProbeFailed || (result.Status == TLSProbePending && status.Status == TLSProbeValid) {
+					status.Status = result.Status
+					status.Detail = domain + ": " + result.Detail
+				}
+			}
+			mu.Lock()
+			next[fmt.Sprintf("%s:%d", host.ResourceType, host.ID)] = status
+			mu.Unlock()
+		}(host)
 	}
-
+	workers.Wait()
 	s.mu.Lock()
 	s.statuses = next
 	s.mu.Unlock()
 }
 
-// httpsHosts returns the primary domain of each local host expected to serve HTTPS,
-// keyed by host id.
-func (s *TLSProbeService) httpsHosts() (map[int64]string, error) {
+func (s *TLSProbeService) httpsTargets() ([]tlsTarget, error) {
 	rows, err := s.db.Query(`
-		SELECT id, domain_names FROM proxy_hosts
-		WHERE enabled = 1 AND server_id = 1
-		  AND tls_passthrough = 0 AND http_only = 0
-		  AND (ssl_forced = 1 OR certificate_id IS NOT NULL)`)
+ SELECT 'proxy_host',id,domain_names FROM proxy_hosts
+ WHERE enabled=1 AND server_id=1 AND tls_passthrough=0 AND http_only=0 AND (ssl_forced=1 OR certificate_id IS NOT NULL)
+ UNION ALL
+ SELECT 'redirection_host',id,domain_names FROM redirection_hosts
+ WHERE enabled=1 AND server_id=1 AND (ssl_forced=1 OR certificate_id IS NOT NULL)
+ UNION ALL
+ SELECT 'dead_host',id,domain_names FROM dead_hosts
+ WHERE enabled=1 AND server_id=1 AND http_only=0`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	out := make(map[int64]string)
+	var targets []tlsTarget
 	for rows.Next() {
-		var id int64
-		var domainsJSON string
-		if err := rows.Scan(&id, &domainsJSON); err != nil {
+		var target tlsTarget
+		var raw string
+		if err := rows.Scan(&target.ResourceType, &target.ID, &raw); err != nil {
 			return nil, err
 		}
-		var domains []string
-		if err := json.Unmarshal([]byte(domainsJSON), &domains); err != nil || len(domains) == 0 {
+		if err := json.Unmarshal([]byte(raw), &target.Domains); err != nil || len(target.Domains) == 0 {
 			continue
 		}
-		out[id] = domains[0]
+		targets = append(targets, target)
 	}
-	return out, rows.Err()
+	return targets, rows.Err()
 }
 
 // probe completes a TLS handshake against the local Caddy listener with the given
@@ -142,7 +170,7 @@ func (s *TLSProbeService) probe(domain string) TLSProbeStatus {
 		&tls.Config{ServerName: domain, InsecureSkipVerify: true},
 	)
 	if err != nil {
-		return TLSProbeStatus{Status: TLSProbeFailed, Detail: "no HTTPS response from Caddy"}
+		return TLSProbeStatus{Status: TLSProbeFailed, Detail: "TLS handshake unavailable; certificate issuance may still be pending. Check Caddy logs for the exact issuer error."}
 	}
 	defer conn.Close()
 
@@ -155,12 +183,15 @@ func (s *TLSProbeService) probe(domain string) TLSProbeStatus {
 	exp := leaf.NotAfter
 	st := TLSProbeStatus{ExpiresAt: &exp}
 	switch {
+	case time.Now().Before(leaf.NotBefore):
+		st.Status = TLSProbeFailed
+		st.Detail = "certificate is not valid yet"
 	case time.Now().After(leaf.NotAfter):
 		st.Status = TLSProbeFailed
 		st.Detail = "certificate expired"
 	case leaf.VerifyHostname(domain) != nil:
 		st.Status = TLSProbePending
-		st.Detail = "no matching certificate yet — provisioning, or DNS not pointed"
+		st.Detail = "presented certificate does not match this domain"
 	default:
 		st.Status = TLSProbeValid
 	}

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -30,7 +29,7 @@ type issueJoinTokenRequest struct {
 type issueJoinTokenResponse struct {
 	Token          string `json:"token"`
 	ExpiresAt      string `json:"expires_at"`
-	InstallCommand string `json:"install_command"`
+	InstallCommand string `json:"install_command,omitempty"`
 }
 
 // Issue handles POST /api/servers/:id/join-token.
@@ -77,9 +76,8 @@ func (h *JoinTokenHandler) Issue(w http.ResponseWriter, r *http.Request) {
 	h.audit.Log(r.Context(), &claims.UserID, "join_token.issue", "server", &serverID, nil, r.RemoteAddr)
 
 	respondJSON(w, http.StatusCreated, issueJoinTokenResponse{
-		Token:          raw,
-		ExpiresAt:      expiresAt.UTC().Format(time.RFC3339),
-		InstallCommand: h.installCommand(r.Context(), r, raw),
+		Token:     raw,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -102,27 +100,4 @@ func (h *JoinTokenHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit.Log(r.Context(), &claims.UserID, "join_token.revoke", "server", &serverID, map[string]any{"count": n}, r.RemoteAddr)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// installCommand renders the one-liner shown in the Issue response. The base
-// URL comes from settings if present, otherwise falls back to the request's
-// scheme + Host header.
-func (h *JoinTokenHandler) installCommand(ctx context.Context, r *http.Request, rawToken string) string {
-	base := ""
-	if h.settings != nil {
-		if v, ok, _ := h.settings.Get(ctx, "controller_public_url"); ok {
-			base = v
-		}
-	}
-	if base == "" {
-		scheme := "https"
-		if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
-			scheme = "http"
-		}
-		if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-			scheme = p
-		}
-		base = scheme + "://" + r.Host
-	}
-	return "curl -fsSL " + base + "/install/" + rawToken + " | sudo bash"
 }

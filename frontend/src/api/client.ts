@@ -1,6 +1,9 @@
 import axios from 'axios'
+import type { InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
+
+type RetryConfig = InternalAxiosRequestConfig & { _authRetried?: boolean }
 
 const client = axios.create({
   baseURL: '/api',
@@ -27,25 +30,22 @@ client.interceptors.response.use(
     if (error.response?.status === 401) {
       const auth = useAuthStore()
       const requestURL = error.config?.url ?? ''
-      if (requestURL.endsWith('/auth/refresh')) {
+      if (requestURL.endsWith('/auth/login')) return Promise.reject(error)
+      const config = error.config as RetryConfig | undefined
+      if (requestURL.endsWith('/auth/refresh') || config?._authRetried || !config) {
         auth.clearSession()
         router.push('/login')
         return Promise.reject(error)
       }
       try {
-        const { data } = await axios.post('/api/auth/refresh')
-        auth.setToken(data.access_token)
-        error.config.headers.Authorization = `Bearer ${data.access_token}`
-        // Re-read the CSRF cookie before retrying. The refresh response can
-        // rotate the csrf_token cookie, and error.config still carries the
-        // stale header from the original attempt (audit L-6). Even though the
-        // request interceptor would overwrite this on its own, doing it here
-        // is explicit and not dependent on interceptor ordering.
+        config._authRetried = true
+        const token = await auth.refreshSession()
+        config.headers.Authorization = `Bearer ${token}`
         const csrfToken = getCookie('csrf_token')
         if (csrfToken) {
-          error.config.headers['X-CSRF-Token'] = csrfToken
+          config.headers['X-CSRF-Token'] = csrfToken
         }
-        return client.request(error.config)
+        return client.request(config)
       } catch {
         auth.clearSession()
         router.push('/login')

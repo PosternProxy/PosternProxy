@@ -4,25 +4,64 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"time"
 
+	"github.com/posternproxy/posternproxy/internal/certstore"
 	"github.com/posternproxy/posternproxy/internal/models"
 )
 
 // CertificateService manages TLS certificates in the database and on disk.
 type CertificateService struct {
-	db      *sql.DB
-	certDir string
-	audit   *AuditService
+	db            *sql.DB
+	certDir       string
+	audit         *AuditService
+	encryptionKey *[32]byte
 }
 
 // NewCertificateService creates a CertificateService that stores uploaded
 // certificate files under certDir.
-func NewCertificateService(db *sql.DB, certDir string, audit *AuditService) *CertificateService {
-	return &CertificateService{db: db, certDir: certDir, audit: audit}
+func NewCertificateService(db *sql.DB, certDir string, audit *AuditService, keys ...[32]byte) *CertificateService {
+	s := &CertificateService{db: db, certDir: certDir, audit: audit}
+	if len(keys) == 1 {
+		s.encryptionKey = &keys[0]
+	}
+	return s
+}
+
+func (s *CertificateService) ProtectExisting(ctx context.Context) error {
+	if s.encryptionKey == nil {
+		return fmt.Errorf("certificate encryption is not configured")
+	}
+	certs, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	store := certstore.Store{Root: s.certDir, Key: *s.encryptionKey}
+	var problems []error
+	for _, cert := range certs {
+		if cert.Provider != "custom" || cert.CertPath == nil || cert.KeyPath == nil {
+			continue
+		}
+		pair, err := store.Load(*cert.CertPath, *cert.KeyPath)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("protect stored certificate %d: %w", cert.ID, err))
+			continue
+		}
+		certPath, keyPath, err := store.Save(cert.ID, pair)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("stage protected certificate %d: %w", cert.ID, err))
+			continue
+		}
+		if certPath != *cert.CertPath || keyPath != *cert.KeyPath {
+			if _, err := s.db.ExecContext(ctx, `UPDATE certificates SET cert_path=?, key_path=? WHERE id=?`, certPath, keyPath, cert.ID); err != nil {
+				return fmt.Errorf("record protected certificate: %w", err)
+			}
+		}
+	}
+	return errors.Join(problems...)
 }
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -72,11 +111,34 @@ func (s *CertificateService) UploadCustom(ctx context.Context, callerID *int64, 
 		return nil, fmt.Errorf("name is required")
 	}
 
-	// Insert a placeholder row first to get an ID for the directory name.
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO certificates (name, provider, domain_names, status) VALUES (?, 'custom', ?, 'pending')`,
-		name, string(domainNames),
-	)
+	certPEM, err := certstore.Read(certReader)
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := certstore.Read(keyReader)
+	if err != nil {
+		return nil, err
+	}
+	var domains []string
+	if err := json.Unmarshal(domainNames, &domains); err != nil {
+		return nil, err
+	}
+	pair := certstore.Pair{Certificate: certPEM, Key: keyPEM}
+	leaf, err := certstore.Validate(pair, domains)
+	if err != nil {
+		return nil, err
+	}
+	if s.encryptionKey == nil {
+		return nil, fmt.Errorf("certificate encryption is not configured")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO certificates (name, provider, domain_names, status, expires_at) VALUES (?, 'custom', ?, 'pending', ?)`,
+		name, string(domainNames), leaf.NotAfter.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, fmt.Errorf("insert certificate: %w", err)
 	}
@@ -85,29 +147,22 @@ func (s *CertificateService) UploadCustom(ctx context.Context, callerID *int64, 
 		return nil, fmt.Errorf("last insert id: %w", err)
 	}
 
-	// Write files under certDir/id/
-	dir := filepath.Join(s.certDir, fmt.Sprintf("%d", id))
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, fmt.Errorf("create cert dir: %w", err)
-	}
-
-	certPath := filepath.Join(dir, "cert.pem")
-	keyPath := filepath.Join(dir, "key.pem")
-
-	if err := writeFile(certPath, certReader); err != nil {
-		return nil, fmt.Errorf("save cert file: %w", err)
-	}
-	if err := writeFile(keyPath, keyReader); err != nil {
-		return nil, fmt.Errorf("save key file: %w", err)
+	store := certstore.Store{Root: s.certDir, Key: *s.encryptionKey}
+	certPath, keyPath, err := store.Save(id, pair)
+	if err != nil {
+		return nil, fmt.Errorf("store encrypted certificate pair: %w", err)
 	}
 
 	// Update row with actual paths and mark active.
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE certificates SET cert_path=?, key_path=?, status='active', updated_at=datetime('now')
 		WHERE id=?`,
 		certPath, keyPath, id,
 	); err != nil {
 		return nil, fmt.Errorf("update cert paths: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit certificate upload: %w", err)
 	}
 
 	cert, err := s.GetByID(ctx, id)
@@ -128,27 +183,14 @@ func (s *CertificateService) Delete(ctx context.Context, callerID *int64, id int
 		return fmt.Errorf("delete certificate: %w", err)
 	}
 
-	// Remove cert files from disk if present
-	if cert.CertPath != nil {
-		dir := filepath.Dir(*cert.CertPath)
-		_ = os.RemoveAll(dir)
-	}
+	// Encrypted sources remain available for recovery; runtime files are retired
+	// separately after successful configuration application.
 
 	_ = s.audit.Log(ctx, callerID, "delete", "certificate", &id, nil, ip)
 	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-func writeFile(path string, r io.Reader) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, r)
-	return err
-}
 
 func validateCertDomains(domainNames json.RawMessage) error {
 	var domains []string

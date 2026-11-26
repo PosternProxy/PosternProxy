@@ -22,6 +22,16 @@ func testProxyHost(domain string) models.ProxyHost {
 	}
 }
 
+func TestFullConfigPreservesInstallerAdminListener(t *testing.T) {
+	cfg, err := BuildFullConfig(&BuildInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin == nil || cfg.Admin.Listen != "127.0.0.1:2019" {
+		t.Fatalf("generated admin listener differs from native/container bootstrap: %+v", cfg.Admin)
+	}
+}
+
 // httpServers unmarshals the http app back out of a built config for inspection.
 func httpServers(t *testing.T, cfg *Config) map[string]*HTTPServer {
 	t.Helper()
@@ -382,5 +392,21 @@ func TestBuildErrorRoutes_DefaultPageIncludesBrandAndVersion(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("default page missing %q", want)
 		}
+	}
+}
+
+func TestParkedHTTPOnlyHasNoHTTPSRoute(t *testing.T) {
+	cfg, err := BuildFullConfig(&BuildInput{DeadHosts: []models.DeadHost{{ID: 99, CaddyID: "park_http", Enabled: true, HTTPOnly: true, DomainNames: json.RawMessage(`["park-http.example"]`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app HTTPApp
+	if err := json.Unmarshal(cfg.Apps["http"], &app); err != nil {
+		t.Fatal(err)
+	}
+	httpJSON, _ := json.Marshal(app.Servers["http"])
+	httpsJSON, _ := json.Marshal(app.Servers["https"])
+	if !strings.Contains(string(httpJSON), "park-http.example") || strings.Contains(string(httpsJSON), "park-http.example") {
+		t.Fatal("HTTP-only parked domain leaked into HTTPS routes")
 	}
 }

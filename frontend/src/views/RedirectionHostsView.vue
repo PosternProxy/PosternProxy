@@ -12,11 +12,14 @@ import {
 } from '@/api/redirectionHosts'
 import { useServerStore } from '@/stores/servers'
 import { useServerContext } from '@/stores/serverContext'
+import TLSStatusBadge from '@/components/TLSStatusBadge.vue'
+import { useTLSStatus } from '@/composables/useTLSStatus'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 import { useResourceList } from '@/composables/useResourceList'
 
 const serverStore = useServerStore()
 const ctx = useServerContext()
+const { tlsFor, tlsError } = useTLSStatus('redirection_host')
 
 const {
   items: hosts,
@@ -214,6 +217,7 @@ const redirectTypeOptions = [
             <th class="px-4 py-3 font-medium text-slate-600">Source Domains</th>
             <th class="px-4 py-3 font-medium text-slate-600">Redirects To</th>
             <th class="px-4 py-3 font-medium text-slate-600">Type</th>
+            <th class="px-4 py-3 font-medium text-slate-600">TLS</th>
             <th class="px-4 py-3 font-medium text-slate-600">Status</th>
             <th class="px-4 py-3 text-right font-medium text-slate-600">Actions</th>
           </tr>
@@ -258,6 +262,15 @@ const redirectTypeOptions = [
                       : host.status_code
                 }}
               </span>
+            </td>
+            <td class="px-4 py-3">
+              <TLSStatusBadge
+                :status="tlsFor(host.id)"
+                :server-id="host.server_id"
+                :enabled="host.enabled"
+                :https="host.ssl_forced || !!host.certificate_id"
+                :load-error="tlsError"
+              />
             </td>
             <td class="px-4 py-3">
               <button

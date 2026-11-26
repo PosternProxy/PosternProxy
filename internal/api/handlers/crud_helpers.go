@@ -15,7 +15,7 @@ func parseID(r *http.Request) (int64, error) {
 }
 
 // Helpers shared by the host CRUD handlers (proxy_hosts, redirection_hosts,
-// dead_hosts, stream_hosts, port_forwards). Each does one of the small bits
+// dead_hosts, stream_hosts). Each does one of the small bits
 // of plumbing those handlers used to inline — parse an ID, decode a JSON
 // body, run the standard "list with optional ?server_id= filter" pattern.
 //

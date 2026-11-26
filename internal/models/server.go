@@ -1,21 +1,24 @@
 package models
 
+import "github.com/posternproxy/posternproxy/internal/agentconfig"
+
 // Server represents a managed proxy server — either the local controller
 // instance (is_local = true, id = 1) or a remote server managed via agent.
 type Server struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	Hostname       string  `json:"hostname"`
-	SSHPort        int     `json:"ssh_port"`
-	SSHUser        string  `json:"ssh_user"`
-	SSHAuthMethod  string  `json:"ssh_auth_method"`
-	AgentTokenHash string  `json:"-"`
-	Status         string  `json:"status"`
-	ProvisionLog   string  `json:"provision_log,omitempty"`
-	IsLocal        bool    `json:"is_local"`
-	LastSeenAt     *string `json:"last_seen_at"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	Enrollment     *agentconfig.Config `json:"enrollment,omitempty"`
+	ID             int64               `json:"id"`
+	Name           string              `json:"name"`
+	Hostname       string              `json:"hostname"`
+	SSHPort        int                 `json:"ssh_port"`
+	SSHUser        string              `json:"ssh_user"`
+	SSHAuthMethod  string              `json:"ssh_auth_method"`
+	AgentTokenHash string              `json:"-"`
+	Status         string              `json:"status"`
+	ProvisionLog   string              `json:"provision_log,omitempty"`
+	IsLocal        bool                `json:"is_local"`
+	LastSeenAt     *string             `json:"last_seen_at"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
 
 	// Online is populated at read-time from the hub, not stored in DB.
 	Online bool `json:"online"`
@@ -27,7 +30,7 @@ type Server struct {
 	LastStatusAt  *string `json:"last_status_at"`
 
 	// DeploymentType controls how the agent is installed on a remote host.
-	// "systemd" uses the SSH+xcaddy provisioner; "docker" uses docker run.
+	// "systemd" uses the native SSH installer; "docker" uses docker run.
 	DeploymentType string `json:"deployment_type"`
 
 	// HTTP2Enabled controls whether this server's HTTPS listener offers HTTP/2.

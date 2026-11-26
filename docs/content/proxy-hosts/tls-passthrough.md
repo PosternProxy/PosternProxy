@@ -45,8 +45,10 @@ Because TLS Passthrough bypasses Caddy's HTTP layer, the following features are 
 
 Caddy uses the SNI field of the TLS ClientHello to match the stream to the correct proxy host. The client **must** send SNI — most modern clients do automatically.
 
-Clients that do not send SNI (e.g. some legacy tooling using bare IP addresses) cannot be matched and will receive a connection reset.
+Clients that do not send matching SNI cannot select that passthrough route. They
+fall through to the configured HTTPS fallback; handshake and routing behavior
+then depend on that fallback configuration.
 
 ## Layer 4 plugin
 
-TLS Passthrough requires the `github.com/mholt/caddy-l4` plugin. This is included in the Caddy binary built by `scripts/install.sh` — no additional steps are needed.
+TLS Passthrough requires the `github.com/mholt/caddy-l4` plugin. This is included in the Caddy binary installed by `posternproxy install` — no additional steps are needed.

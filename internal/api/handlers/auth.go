@@ -19,11 +19,12 @@ type AuthHandler struct {
 	audit         *services.AuditService
 	jwtSecret     string
 	secureCookies bool
+	sessions      *services.SessionService
 }
 
 // NewAuthHandler creates an AuthHandler backed by the given services and JWT secret.
-func NewAuthHandler(users *services.UserService, audit *services.AuditService, jwtSecret string, secureCookies bool) *AuthHandler {
-	return &AuthHandler{users: users, audit: audit, jwtSecret: jwtSecret, secureCookies: secureCookies}
+func NewAuthHandler(users *services.UserService, audit *services.AuditService, jwtSecret string, secureCookies bool, sessions *services.SessionService) *AuthHandler {
+	return &AuthHandler{users: users, audit: audit, jwtSecret: jwtSecret, secureCookies: secureCookies, sessions: sessions}
 }
 
 type loginRequest struct {
@@ -70,7 +71,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens, err := auth.GenerateTokenPair(h.jwtSecret, user.ID, user.Email, user.Role)
+	tokens, err := h.sessions.Issue(r.Context(), user)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -103,21 +104,9 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := auth.ValidateRefreshToken(h.jwtSecret, cookie.Value)
+	tokens, err := h.sessions.Refresh(r.Context(), cookie.Value)
 	if err != nil {
-		respondError(w, http.StatusUnauthorized, "invalid refresh token")
-		return
-	}
-
-	user, err := h.users.GetByID(r.Context(), claims.UserID)
-	if err != nil || user == nil || !user.IsActive {
-		respondError(w, http.StatusUnauthorized, "user not found or inactive")
-		return
-	}
-
-	tokens, err := auth.GenerateTokenPair(h.jwtSecret, user.ID, user.Email, user.Role)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to generate token")
+		respondError(w, http.StatusUnauthorized, "invalid or revoked refresh token")
 		return
 	}
 
@@ -136,11 +125,19 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 // Logout clears the refresh_token cookie and ends the session.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	claims := auth.UserFromContext(r.Context())
+	if claims == nil || h.sessions.Revoke(r.Context(), claims) != nil {
+		respondError(w, http.StatusInternalServerError, "failed to revoke session")
+		return
+	}
+	h.audit.Log(r.Context(), &claims.UserID, "logout", "session", nil, nil, r.RemoteAddr)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",
 		Path:     "/api/auth",
 		HttpOnly: true,
+		Secure:   h.secureCookies,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 	respondJSON(w, http.StatusOK, map[string]string{"message": "logged out"})

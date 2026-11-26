@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -17,10 +18,14 @@ type TokenResolver interface {
 	Resolve(ctx context.Context, token string) (*Claims, error)
 }
 
+type SessionValidator interface {
+	ValidateSession(context.Context, *Claims) error
+}
+
 // Middleware validates requests using a JWT secret. If a TokenResolver is
 // provided, tokens that fail JWT parsing are tried against it as a fallback
 // (e.g. long-lived API tokens with the "pp_tok_" prefix).
-func Middleware(secret string, resolver TokenResolver) func(http.Handler) http.Handler {
+func Middleware(secret string, resolver TokenResolver, validators ...SessionValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := extractBearerToken(r)
@@ -32,6 +37,13 @@ func Middleware(secret string, resolver TokenResolver) func(http.Handler) http.H
 			// 1. Try JWT first (must be an access token).
 			claims, err := ValidateAccessToken(secret, tokenStr)
 			if err == nil {
+				claims.CredentialKind = "session"
+				for _, validator := range validators {
+					if validator == nil || validator.ValidateSession(r.Context(), claims) != nil {
+						http.Error(w, `{"error":"invalid or revoked session"}`, http.StatusUnauthorized)
+						return
+					}
+				}
 				ctx := context.WithValue(r.Context(), userContextKey, claims)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -47,7 +59,7 @@ func Middleware(secret string, resolver TokenResolver) func(http.Handler) http.H
 				}
 				if err != nil {
 					// Recognisable token format but invalid — return specific error.
-					http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusUnauthorized)
+					http.Error(w, `{"error":"invalid or revoked token"}`, http.StatusUnauthorized)
 					return
 				}
 			}
@@ -75,17 +87,36 @@ func RequireAdmin(next http.Handler) http.Handler {
 func RequireScope(scope string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Scope enforcement is only applied to API token requests.
-			// JWT sessions carry no scope header, so they always pass through.
-			if s := r.Header.Get("X-Token-Scope"); s != "" {
-				if !strings.Contains(s, scope) {
-					http.Error(w, `{"error":"insufficient token scope"}`, http.StatusForbidden)
-					return
-				}
+			claims := UserFromContext(r.Context())
+			if claims == nil || (claims.CredentialKind != "session" &&
+				(claims.CredentialKind != "api_token" || !slices.Contains(claims.Scopes, scope))) {
+				http.Error(w, `{"error":"insufficient token scope"}`, http.StatusForbidden)
+				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func RequireManagementScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := "write"
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			scope = "read"
+		}
+		RequireScope(scope)(next).ServeHTTP(w, r)
+	})
+}
+
+func RequireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := UserFromContext(r.Context())
+		if claims == nil || claims.CredentialKind != "session" {
+			http.Error(w, `{"error":"user session required"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // UserFromContext retrieves the authenticated user's Claims from the request

@@ -50,6 +50,8 @@ func (h *APITokenHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.svc.Audit(r.Context(), claims.UserID, "create", &tok.ID, r.RemoteAddr)
+	w.Header().Set("Cache-Control", "no-store")
 	respondJSON(w, http.StatusCreated, tok)
 }
 
@@ -70,5 +72,6 @@ func (h *APITokenHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.svc.Audit(r.Context(), claims.UserID, "revoke", &id, r.RemoteAddr)
 	w.WriteHeader(http.StatusNoContent)
 }

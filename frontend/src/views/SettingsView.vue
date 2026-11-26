@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { getSettings, updateSettings } from '@/api/settings'
+import { getSettings } from '@/api/settings'
 import { errorMessage } from '@/utils/errors'
 
 const loading = ref(true)
-const saving = ref(false)
 const error = ref('')
-const success = ref('')
 
 // Editable fields
 const caddyAPIURL = ref('')
@@ -23,23 +21,6 @@ async function fetchSettings() {
     error.value = errorMessage(e, 'Failed to load settings')
   } finally {
     loading.value = false
-  }
-}
-
-async function save() {
-  saving.value = true
-  error.value = ''
-  success.value = ''
-  try {
-    await updateSettings({
-      caddy_api_url: caddyAPIURL.value.trim(),
-      cert_storage_path: certStoragePath.value.trim(),
-    })
-    success.value = 'Settings saved successfully.'
-  } catch (e: unknown) {
-    error.value = errorMessage(e, 'Failed to save settings')
-  } finally {
-    saving.value = false
   }
 }
 
@@ -71,20 +52,12 @@ onMounted(fetchSettings)
         {{ error }}
       </div>
 
-      <!-- Success banner -->
-      <div
-        v-if="success"
-        class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-      >
-        {{ success }}
-      </div>
-
       <!-- Caddy Settings -->
       <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-100 px-6 py-4">
           <h3 class="font-semibold text-slate-800">Caddy</h3>
           <p class="mt-0.5 text-sm text-slate-500">
-            Configure how PosternProxy connects to the local Caddy instance.
+            View how PosternProxy connects to the local Caddy instance.
           </p>
         </div>
         <div class="px-6 py-5 space-y-4">
@@ -94,7 +67,7 @@ onMounted(fetchSettings)
             </label>
             <input
               v-model="caddyAPIURL"
-              type="text"
+              type="text" readonly
               placeholder="http://localhost:2019"
               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none"
             />
@@ -118,7 +91,7 @@ onMounted(fetchSettings)
             </label>
             <input
               v-model="certStoragePath"
-              type="text"
+              type="text" readonly
               placeholder="data/certs"
               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none"
             />
@@ -129,27 +102,7 @@ onMounted(fetchSettings)
         </div>
       </div>
 
-      <!-- Save button -->
-      <div class="flex justify-end">
-        <button
-          @click="save"
-          :disabled="saving"
-          class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
-          <svg v-if="saving" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-            <circle
-              class="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              stroke-width="4"
-            />
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-          </svg>
-          {{ saving ? 'Saving…' : 'Save Settings' }}
-        </button>
-      </div>
+      <p class="text-sm text-slate-600">These values come from the service environment. Change POSTERNPROXY_CADDY_API or POSTERNPROXY_CERT_DIR and restart the controller. Migrate existing certificate storage before changing its path.</p>
     </div>
   </div>
 </template>

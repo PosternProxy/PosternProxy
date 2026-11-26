@@ -78,7 +78,7 @@ func advancedConfigJSON(s string) json.RawMessage {
 }
 
 // BuildRedirectionHostRoute generates a Caddy route for a redirection host.
-func BuildRedirectionHostRoute(h *models.RedirectionHost) (*Route, error) {
+func BuildRedirectionHostRoute(h *models.RedirectionHost, lists ...*models.AccessList) (*Route, error) {
 	var domains []string
 	if err := json.Unmarshal(h.DomainNames, &domains); err != nil {
 		return nil, fmt.Errorf("parse domain names: %w", err)
@@ -94,7 +94,7 @@ func BuildRedirectionHostRoute(h *models.RedirectionHost) (*Route, error) {
 		target += "{http.request.uri}"
 	}
 
-	return &Route{
+	route := &Route{
 		ID:    h.CaddyID,
 		Match: []Matcher{{Host: domains}},
 		Handle: []Handler{{
@@ -103,13 +103,17 @@ func BuildRedirectionHostRoute(h *models.RedirectionHost) (*Route, error) {
 			StaticHeaders: map[string][]string{"Location": {target}},
 		}},
 		Terminal: true,
-	}, nil
+	}
+	if len(lists) > 0 && lists[0] != nil {
+		restrictRoute(route, lists[0])
+	}
+	return route, nil
 }
 
 // BuildDeadHostRoute generates a Caddy route returning a parked-domain response.
 // When no custom body is supplied, a branded PosternProxy parked-domain page is
 // served (for 200/404/410/503 and any other code).
-func BuildDeadHostRoute(h *models.DeadHost, version string) (*Route, error) {
+func BuildDeadHostRoute(h *models.DeadHost, version string, lists ...*models.AccessList) (*Route, error) {
 	var domains []string
 	if err := json.Unmarshal(h.DomainNames, &domains); err != nil {
 		return nil, fmt.Errorf("parse domain names: %w", err)
@@ -125,7 +129,7 @@ func BuildDeadHostRoute(h *models.DeadHost, version string) (*Route, error) {
 		body = defaultParkedPage(code, version)
 	}
 
-	return &Route{
+	route := &Route{
 		ID:    h.CaddyID,
 		Match: []Matcher{{Host: domains}},
 		Handle: []Handler{{
@@ -135,7 +139,11 @@ func BuildDeadHostRoute(h *models.DeadHost, version string) (*Route, error) {
 			StaticHeaders: map[string][]string{"Content-Type": {"text/html; charset=utf-8"}},
 		}},
 		Terminal: true,
-	}, nil
+	}
+	if len(lists) > 0 && lists[0] != nil {
+		restrictRoute(route, lists[0])
+	}
+	return route, nil
 }
 
 // --- helpers ---
@@ -162,7 +170,7 @@ func buildReverseProxyRoute(h *models.ProxyHost) *Route {
 
 	transport := &Transport{Protocol: "http"}
 	if h.ForwardScheme == "https" {
-		transport.TLS = &TLSOptions{}
+		transport.TLS = &TLSOptions{HandshakeTimeout: "10s"}
 	}
 
 	// Load balancing — only emit when there are multiple upstreams.
@@ -184,15 +192,8 @@ func buildReverseProxyRoute(h *models.ProxyHost) *Route {
 		Upstreams:     upstreams,
 		Transport:     transport,
 		LoadBalancing: lb,
-		Headers: &HeaderOps{
-			Request: &HeaderMutation{
-				Set: map[string][]string{
-					"X-Forwarded-Proto": {"{http.request.scheme}"},
-					"X-Real-IP":         {"{http.request.remote.host}"},
-				},
-			},
-		},
-		HealthChecks: buildHealthChecks(h),
+		Headers:       clientHeaders(),
+		HealthChecks:  buildHealthChecks(h),
 	}
 
 	return &Route{Handle: []Handler{proxyHandler}}
@@ -253,7 +254,7 @@ func buildLocationRoute(loc models.ProxyHostLocation) *Route {
 	}
 	transport := &Transport{Protocol: "http"}
 	if loc.ForwardScheme == "https" {
-		transport.TLS = &TLSOptions{}
+		transport.TLS = &TLSOptions{HandshakeTimeout: "10s"}
 	}
 
 	return &Route{
@@ -262,9 +263,17 @@ func buildLocationRoute(loc models.ProxyHostLocation) *Route {
 			Handler:   "reverse_proxy",
 			Upstreams: []*Upstream{upstream},
 			Transport: transport,
+			Headers:   clientHeaders(),
 		}},
 		Terminal: true,
 	}
+}
+
+func clientHeaders() *HeaderOps {
+	return &HeaderOps{Request: &HeaderMutation{Set: map[string][]string{
+		"X-Real-IP":       {"{http.vars.client_ip}"},
+		"X-Forwarded-For": {"{http.vars.client_ip}"},
+	}}}
 }
 
 func buildIPRestrictionRoutes(al *models.AccessList) []*Route {
@@ -282,7 +291,7 @@ func buildIPRestrictionRoutes(al *models.AccessList) []*Route {
 	// Explicit deny rules run first — block these IPs regardless of allow list.
 	if len(denyRanges) > 0 {
 		routes = append(routes, &Route{
-			Match:    []Matcher{{RemoteIP: &RemoteIPMatcher{Ranges: denyRanges}}},
+			Match:    []Matcher{{ClientIP: &RemoteIPMatcher{Ranges: denyRanges}}},
 			Handle:   []Handler{{Handler: "static_response", StatusCode: 403}},
 			Terminal: true,
 		})
@@ -292,7 +301,7 @@ func buildIPRestrictionRoutes(al *models.AccessList) []*Route {
 	if len(allowRanges) > 0 {
 		routes = append(routes, &Route{
 			Match: []Matcher{{
-				Not: []Matcher{{RemoteIP: &RemoteIPMatcher{Ranges: allowRanges}}},
+				Not: []Matcher{{ClientIP: &RemoteIPMatcher{Ranges: allowRanges}}},
 			}},
 			Handle:   []Handler{{Handler: "static_response", StatusCode: 403}},
 			Terminal: true,
@@ -314,7 +323,7 @@ func buildRateLimitHandler(h *models.ProxyHost) Handler {
 		Handler: "rate_limit",
 		RateLimits: map[string]*RateLimitZone{
 			zoneName: {
-				Key:       "{http.request.remote.host}",
+				Key:       "{http.vars.client_ip}",
 				Window:    window,
 				MaxEvents: h.RateLimitRequests,
 			},
@@ -432,32 +441,14 @@ func defaultProxyErrorPage(statusCode int, version string) string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%d %s - PosternProxy</title>
 <style>
-:root{color-scheme:light;--ink:#0f172a;--muted:#64748b;--line:#dbeafe;--panel:#fff;--soft:#f8fafc;--blue:#2563eb;--teal:#14b8a6;--violet:#7c3aed}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(135deg,#f8fafc 0%%,#eff6ff 55%%,#f5f3ff 100%%);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;padding:32px}
-.wrap{width:min(960px,100%%);background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.35);box-shadow:0 24px 80px rgba(15,23,42,.14);border-radius:18px;overflow:hidden}
-.top{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 26px;border-bottom:1px solid #e2e8f0;background:rgba(255,255,255,.72)}
-.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.2px}.brand svg{width:42px;height:42px;flex:none}.brand small{display:block;color:var(--muted);font-weight:600;font-size:12px;margin-top:2px}
-.badge{font-size:12px;font-weight:700;color:#1e40af;background:#dbeafe;border:1px solid #bfdbfe;border-radius:999px;padding:7px 11px;white-space:nowrap}
-.main{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr);gap:0}.hero{padding:42px 44px}.eyebrow{font-size:13px;font-weight:800;color:#1d4ed8;text-transform:uppercase;letter-spacing:.08em}.code{font-size:84px;line-height:.9;font-weight:900;margin:12px 0 8px;letter-spacing:0}.hero h1{font-size:32px;line-height:1.15;margin:0 0 14px}.hero p{font-size:16px;line-height:1.65;color:#475569;margin:0;max-width:620px}
-.meta{background:var(--soft);border-left:1px solid #e2e8f0;padding:36px 30px}.meta h2{font-size:15px;margin:0 0 16px}.kv{display:grid;gap:12px}.row{padding:12px;border:1px solid #e2e8f0;background:#fff;border-radius:10px}.row span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;font-weight:800;margin-bottom:4px}.row code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;color:#0f172a;word-break:break-word}
-.checks{margin-top:24px;border-top:1px solid #e2e8f0;padding-top:20px}.checks p{font-size:13px;line-height:1.55;color:#475569;margin:0 0 10px}.checks ul{margin:0;padding-left:18px;color:#475569;font-size:13px;line-height:1.65}
-.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 26px;border-top:1px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:12px}
-@media (max-width:760px){body{padding:18px}.top,.foot{align-items:flex-start;flex-direction:column}.main{grid-template-columns:1fr}.hero{padding:32px 24px}.meta{border-left:0;border-top:1px solid #e2e8f0;padding:24px}.code{font-size:64px}.hero h1{font-size:26px}}
+%s
 </style>
 </head>
 <body>
 <main class="wrap">
 <header class="top">
 <div class="brand">
-<svg viewBox="0 0 64 64" role="img" aria-label="PosternProxy logo">
-<defs><linearGradient id="ppg" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#14b8a6"/><stop offset=".55" stop-color="#2563eb"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
-<path d="M32 5 55 18v28L32 59 9 46V18L32 5Z" fill="none" stroke="url(#ppg)" stroke-width="4" stroke-linejoin="round"/>
-<path d="M22 39V27a10 10 0 0 1 20 0v12" fill="none" stroke="#0f172a" stroke-width="4" stroke-linecap="round"/>
-<rect x="17" y="31" width="30" height="20" rx="4" fill="#0f172a"/>
-<circle cx="32" cy="40" r="3" fill="#fff"/><path d="M32 43v5" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-<path d="M7 24h12M7 33h8M7 42h12" stroke="url(#ppg)" stroke-width="4" stroke-linecap="round"/>
-</svg>
-<div>PosternProxy<small>Reverse proxy edge</small></div>
+%s
 </div>
 <div class="badge">Upstream issue</div>
 </header>
@@ -492,7 +483,7 @@ func defaultProxyErrorPage(statusCode int, version string) string {
 </footer>
 </main>
 </body>
-</html>`, statusCode, html.EscapeString(title), statusCode, html.EscapeString(title), html.EscapeString(summary), html.EscapeString(detail), statusCode, html.EscapeString(title), html.EscapeString(version))
+</html>`, statusCode, html.EscapeString(title), defaultPageStyles, defaultPageLogo, statusCode, html.EscapeString(title), html.EscapeString(summary), html.EscapeString(detail), statusCode, html.EscapeString(title), html.EscapeString(version))
 }
 
 // defaultParkedPage renders the branded PosternProxy parked-domain page shown for
@@ -530,30 +521,14 @@ func defaultParkedPage(statusCode int, version string) string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%s - PosternProxy</title>
 <style>
-:root{color-scheme:light;--ink:#0f172a;--muted:#64748b}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(135deg,#f8fafc 0%%,#eff6ff 55%%,#f5f3ff 100%%);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;padding:32px}
-.wrap{width:min(560px,100%%);background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.35);box-shadow:0 24px 80px rgba(15,23,42,.14);border-radius:18px;overflow:hidden}
-.top{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 26px;border-bottom:1px solid #e2e8f0;background:rgba(255,255,255,.72)}
-.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.2px}.brand svg{width:42px;height:42px;flex:none}.brand small{display:block;color:var(--muted);font-weight:600;font-size:12px;margin-top:2px}
-.badge{font-size:12px;font-weight:700;color:#1e40af;background:#dbeafe;border:1px solid #bfdbfe;border-radius:999px;padding:7px 11px;white-space:nowrap}
-.hero{padding:42px 44px}.eyebrow{font-size:13px;font-weight:800;color:#1d4ed8;text-transform:uppercase;letter-spacing:.08em}.code{font-size:84px;line-height:.9;font-weight:900;margin:12px 0 8px}.hero h1{font-size:30px;line-height:1.15;margin:14px 0}.hero p{font-size:16px;line-height:1.65;color:#475569;margin:0}
-.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 26px;border-top:1px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:12px}
-@media (max-width:600px){body{padding:18px}.top,.foot{align-items:flex-start;flex-direction:column}.hero{padding:32px 24px}.code{font-size:64px}.hero h1{font-size:24px}}
+%s
 </style>
 </head>
 <body>
-<main class="wrap">
+<main class="wrap parked">
 <header class="top">
 <div class="brand">
-<svg viewBox="0 0 64 64" role="img" aria-label="PosternProxy logo">
-<defs><linearGradient id="ppg" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#14b8a6"/><stop offset=".55" stop-color="#2563eb"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
-<path d="M32 5 55 18v28L32 59 9 46V18L32 5Z" fill="none" stroke="url(#ppg)" stroke-width="4" stroke-linejoin="round"/>
-<path d="M22 39V27a10 10 0 0 1 20 0v12" fill="none" stroke="#0f172a" stroke-width="4" stroke-linecap="round"/>
-<rect x="17" y="31" width="30" height="20" rx="4" fill="#0f172a"/>
-<circle cx="32" cy="40" r="3" fill="#fff"/><path d="M32 43v5" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-<path d="M7 24h12M7 33h8M7 42h12" stroke="url(#ppg)" stroke-width="4" stroke-linecap="round"/>
-</svg>
-<div>PosternProxy<small>Reverse proxy edge</small></div>
+%s
 </div>
 <div class="badge">%s</div>
 </header>
@@ -570,7 +545,7 @@ func defaultParkedPage(statusCode int, version string) string {
 </main>
 </body>
 </html>`,
-		html.EscapeString(m.title), html.EscapeString(m.badge), html.EscapeString(m.eyebrow),
+		html.EscapeString(m.title), defaultPageStyles, defaultPageLogo, html.EscapeString(m.badge), html.EscapeString(m.eyebrow),
 		codeBlock, html.EscapeString(m.title), html.EscapeString(m.message), html.EscapeString(version))
 }
 
@@ -670,4 +645,13 @@ func buildCustomHeadersHandler(h *models.ProxyHost) *Handler {
 		hdr.Response = resMut
 	}
 	return hdr
+}
+
+func restrictRoute(route *Route, al *models.AccessList) {
+	routes := buildIPRestrictionRoutes(al)
+	if len(routes) == 0 {
+		return
+	}
+	routes = append(routes, &Route{Handle: route.Handle, Terminal: true})
+	route.Handle = []Handler{{Handler: "subroute", Routes: routes}}
 }

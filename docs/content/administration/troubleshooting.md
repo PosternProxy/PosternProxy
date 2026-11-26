@@ -10,7 +10,7 @@ weight: 3
 ### PosternProxy fails to start
 
 ```bash
-journalctl -u posternproxy -n 50 --no-pager
+sudo tail -n 50 /var/log/posternproxy/posternproxy.log
 ```
 
 Common causes:
@@ -20,7 +20,7 @@ Common causes:
 | `database is locked` | Another PosternProxy instance is running | `systemctl stop posternproxy; systemctl start posternproxy` |
 | `migration failed` | Bad database state | Restore from backup |
 | `address already in use :81` | Another process owns port 81 | `ss -tlnp \| grep 81` to find it |
-| `config.env not found` | Missing config file | Re-run `scripts/install.sh` or create manually |
+| `config.env not found` | Missing config file | For existing data, restore the original config and encryption secret. For a fresh install, run `posternproxy install`. |
 
 ### Caddy fails to start
 
@@ -34,7 +34,7 @@ Common causes:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `bind: permission denied` on port 80/443 | Missing `CAP_NET_BIND_SERVICE` | Check systemd unit `AmbientCapabilities` |
-| `plugin not found: layer4` | Caddy built without L4 plugin | Rebuild Caddy with `--with github.com/mholt/caddy-l4` |
+| `plugin not found: layer4` | Caddy built without L4 plugin | Replace Caddy using the [pinned build]({{< relref "/administration/release-validation" >}}) |
 | `failed to obtain certificate` | DNS not propagated or port 80 blocked | Check DNS and UFW |
 
 ## UI and API errors
@@ -70,7 +70,7 @@ front of the UI.
 3. Check Caddy's config includes the route:
 
    ```bash
-   curl -s http://localhost:2019/config/apps/http/servers/https/routes | jq .
+   curl -fsS http://localhost:2019/config/apps/http/servers/ | jq .
    ```
 
 4. Verify the upstream is actually listening:
@@ -100,28 +100,30 @@ If health checks are configured, check the upstream health widget on the Dashboa
 
 ### Can't log in
 
-- Verify credentials: default email is `admin@posternproxy.local`; the password is randomly generated on first boot and printed to the service logs (`journalctl -u posternproxy | grep password`)
+- Verify credentials: the default email is `admin@posternproxy.local`; retrieve the
+  initial password with `sudo grep -A6 'INITIAL SETUP' /var/log/posternproxy/posternproxy.log`
 - Check fail2ban has not banned your IP: `fail2ban-client status posternproxy`
 - Unban: `fail2ban-client set posternproxy unbanip <your-ip>`
 - Check the service is running: `systemctl status posternproxy`
 
 ### UI shows stale data
 
-Click the **↻** refresh button on the relevant page, or force a full page reload (Ctrl+Shift+R). PosternProxy does not push real-time updates to the frontend (except the provisioning terminal and dashboard health widget).
+Reload the page to refresh list data. Provisioning streams output; dashboard
+health and configuration state are polled. Other lists do not receive live
+WebSocket updates.
 
 ### Force Caddy sync
 
 If you suspect Caddy's config has drifted from the database (e.g. after a manual `caddy reload`):
 
-1. Go to **Settings → Force Caddy Sync**
-2. Click the button — PosternProxy rebuilds and pushes the full config
+1. Use **Retry sync** in the shared configuration notice, or **Re-sync** on Servers
+2. Check desired/applied configuration state and errors after requesting the sync
 
-Or via API:
-
-```bash
-curl -X POST -H "Authorization: Bearer <token>" \
-     http://localhost:81/api/settings/caddy-sync
-```
+The API is `POST /api/servers/{id}/resync` (Local is server `1`), requiring
+admin authority, write scope and CSRF cookie/header validation. See the
+[API write example]({{< relref "/access-tokens" >}}#example-create-a-proxy-host-via-api)
+and [application status]({{< relref "/multi-server/configuration-status" >}}).
+There is no `/api/settings/caddy-sync` endpoint.
 
 ## Multi-server issues
 
@@ -137,10 +139,14 @@ curl -X POST -H "Authorization: Bearer <token>" \
 2. Verify the agent can reach the controller:
 
    ```bash
-   curl http://<controller-ip>:81/api/auth/me
+   curl -fsS http://<controller-ip>:81/api/version
    ```
 
-3. Check the agent token in `/etc/posternproxy-agent/config.env` matches what is registered on the controller (re-provision to regenerate)
+3. Check the protected agent configuration has the correct controller URL,
+   numeric server ID and valid agent token. New installations use
+   `posternproxy-agent`; historical ones may use `caddyproxy-agent`. Review
+   [Provisioning]({{< relref "/multi-server/provisioning" >}}) before redeploying;
+   it rotates credentials and disconnects the previous identity.
 
 ### Config changes not reaching remote server
 
@@ -152,9 +158,9 @@ curl -X POST -H "Authorization: Bearer <token>" \
 
 | Component | Log command |
 |---|---|
-| PosternProxy | `journalctl -u posternproxy -f` |
+| PosternProxy (installed service) | `sudo tail -f /var/log/posternproxy/posternproxy.log` |
 | Caddy | `journalctl -u caddy -f` |
-| Agent | `journalctl -u posternproxy-agent -f` |
+| Agent | Depends on installer: see [Provisioning]({{< relref "/multi-server/provisioning" >}}#logs-and-readiness) |
 | fail2ban | `journalctl -u fail2ban -f` |
 | UFW | `/var/log/ufw.log` |
 
@@ -169,9 +175,13 @@ cat /etc/os-release
 
 # Service status
 systemctl status posternproxy caddy
-journalctl -u posternproxy -n 100 --no-pager
+sudo tail -n 100 /var/log/posternproxy/posternproxy.log
 journalctl -u caddy -n 100 --no-pager
 
 # Caddy config (sanitise any secrets)
 curl -s http://localhost:2019/config/ | jq .
 ```
+
+Remove credentials, generated setup passwords, private keys and other secrets
+before sharing logs or Caddy configuration. Use the private reporting process
+for suspected vulnerabilities.

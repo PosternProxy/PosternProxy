@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/posternproxy/posternproxy/internal/models"
@@ -12,9 +13,60 @@ func newHistorySvc(t *testing.T) (*ConfigHistoryService, *UserService) {
 	t.Helper()
 	db := testDB(t)
 	audit := NewAuditService(db)
-	history := NewConfigHistoryService(db)
+	history := NewConfigHistoryService(db, [32]byte{1})
 	users := NewUserService(db, audit)
 	return history, users
+}
+
+func TestHistoryEncryptsSnapshotsAndProtectsLegacyRows(t *testing.T) {
+	history, _ := newHistorySvc(t)
+	ctx := context.Background()
+	secret := `{"custom_headers":[{"value":"history-secret-sentinel"}]}`
+	if _, err := history.db.Exec(`INSERT INTO config_history(resource_type,resource_id,action,snapshot) VALUES ('proxy_host',42,'update',?)`, secret); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := history.ProtectExisting(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var protected string
+	if err := history.db.QueryRow(`SELECT snapshot FROM config_history WHERE resource_id=42`).Scan(&protected); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(protected, "enc:v1:") || strings.Contains(protected, "history-secret-sentinel") {
+		t.Fatal("legacy snapshot remained plaintext")
+	}
+	entries, err := history.List(ctx, "proxy_host", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Snapshot != "{}" {
+		t.Fatalf("history listing leaked snapshot: %+v", entries)
+	}
+	called := false
+	history.Register("proxy_host", func(ctx context.Context, actor *int64, id int64, snapshot []byte, ip string) error {
+		called = true
+		if string(snapshot) != secret {
+			t.Error("rollback lost encrypted configuration")
+		}
+		return nil
+	})
+	if err := history.Rollback(ctx, nil, entries[0].ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("rollback not called")
+	}
+	if err := history.Snapshot(ctx, "proxy_host", 43, "update", map[string]string{"token": "new-snapshot-secret"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.db.QueryRow(`SELECT snapshot FROM config_history WHERE resource_id=43`).Scan(&protected); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(protected, "enc:v1:") || strings.Contains(protected, "new-snapshot-secret") {
+		t.Fatal("new snapshot remained plaintext")
+	}
 }
 
 func TestConfigHistoryService_SnapshotAndList(t *testing.T) {
@@ -49,8 +101,8 @@ func TestConfigHistoryService_SnapshotAndList(t *testing.T) {
 	if err := json.Unmarshal([]byte(e.Snapshot), &got); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
-	if got.Name != "test" {
-		t.Errorf("snapshot Name = %q", got.Name)
+	if got.Name != "" {
+		t.Errorf("snapshot list exposed content: %q", got.Name)
 	}
 }
 

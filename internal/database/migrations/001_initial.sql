@@ -187,24 +187,6 @@ CREATE TABLE IF NOT EXISTS dead_hosts (
 
 CREATE INDEX IF NOT EXISTS idx_dead_hosts_server_id ON dead_hosts(server_id);
 
--- ── Port forwards (OS-level via iptables / nftables / socat) ──────────────────
-
-CREATE TABLE IF NOT EXISTS port_forwards (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    server_id     INTEGER NOT NULL DEFAULT 1 REFERENCES servers(id),
-    protocol      TEXT    NOT NULL DEFAULT 'tcp' CHECK (protocol IN ('tcp', 'udp', 'tcp+udp')),
-    incoming_port INTEGER NOT NULL,
-    forward_host  TEXT    NOT NULL,
-    forward_port  INTEGER NOT NULL,
-    interface     TEXT    NOT NULL DEFAULT '',
-    method        TEXT    NOT NULL DEFAULT 'iptables' CHECK (method IN ('iptables', 'nftables', 'socat')),
-    enabled       INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_port_forwards_server_id ON port_forwards(server_id);
-
 -- ── Audit log ─────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS audit_log (

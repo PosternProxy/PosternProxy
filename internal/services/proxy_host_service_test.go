@@ -12,7 +12,7 @@ func newProxyHostSvc(t *testing.T) *ProxyHostService {
 	t.Helper()
 	db := testDB(t)
 	audit := NewAuditService(db)
-	history := NewConfigHistoryService(db)
+	history := NewConfigHistoryService(db, [32]byte{1})
 	return NewProxyHostService(db, nullCaddy(), audit, history, nil)
 }
 

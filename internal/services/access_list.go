@@ -10,13 +10,18 @@ import (
 
 // AccessListService manages IP restriction rules stored in SQLite.
 type AccessListService struct {
+	sync  *CaddySyncService
 	db    *sql.DB
 	audit *AuditService
 }
 
 // NewAccessListService creates an AccessListService backed by db.
-func NewAccessListService(db *sql.DB, audit *AuditService) *AccessListService {
-	return &AccessListService{db: db, audit: audit}
+func NewAccessListService(db *sql.DB, audit *AuditService, syncServices ...*CaddySyncService) *AccessListService {
+	s := &AccessListService{db: db, audit: audit}
+	if len(syncServices) > 0 {
+		s.sync = syncServices[0]
+	}
+	return s
 }
 
 // ── Input types ───────────────────────────────────────────────────────────────
@@ -116,6 +121,9 @@ func (s *AccessListService) Create(ctx context.Context, callerID *int64, input C
 		return nil, err
 	}
 	s.audit.Log(ctx, callerID, "create", "access_list", &id, map[string]any{"name": input.Name}, ip)
+	if s.sync != nil {
+		return al, s.sync.SyncDirty(ctx)
+	}
 	return al, nil
 }
 
@@ -157,6 +165,9 @@ func (s *AccessListService) Update(ctx context.Context, callerID *int64, id int6
 		return nil, err
 	}
 	s.audit.Log(ctx, callerID, "update", "access_list", &id, map[string]any{"name": input.Name}, ip)
+	if s.sync != nil {
+		return al, s.sync.SyncDirty(ctx)
+	}
 	return al, nil
 }
 
@@ -169,6 +180,9 @@ func (s *AccessListService) Delete(ctx context.Context, callerID *int64, id int6
 		return fmt.Errorf("delete access list: %w", err)
 	}
 	s.audit.Log(ctx, callerID, "delete", "access_list", &id, nil, ip)
+	if s.sync != nil {
+		return s.sync.SyncDirty(ctx)
+	}
 	return nil
 }
 

@@ -5,28 +5,52 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agent"
 	"github.com/posternproxy/posternproxy/internal/caddy"
+	"github.com/posternproxy/posternproxy/internal/certstore"
 	"github.com/posternproxy/posternproxy/internal/models"
-	"github.com/rs/zerolog/log"
 )
 
 // agentCertDir is the directory where the agent stores custom certificate files.
-const agentCertDir = "/var/lib/posternproxy-agent/certs"
+const agentCertDir = "/run/posternproxy-agent-certs"
 
 // CaddySyncService rebuilds and pushes the full Caddy configuration from the DB.
 // It is called once on startup and can be triggered manually after bulk changes.
 type CaddySyncService struct {
-	db      *sql.DB
-	caddy   *caddy.Client
-	hub     *agent.Hub
-	version string
+	trustedProxies map[int64][]string
+	mu             sync.Mutex
+	locks          map[int64]*sync.Mutex
+	pending        map[int64]configAttempt
+	cancel         context.CancelFunc
+	done           chan struct{}
+	db             *sql.DB
+	caddy          *caddy.Client
+	hub            *agent.Hub
+	version        string
+	certStore      *certstore.Store
+	certRuntimeDir string
+}
+
+// ConfigureTrustedProxies is called before the sync workers start.
+func (s *CaddySyncService) ConfigureTrustedProxies(policies map[int64][]string) {
+	s.trustedProxies = policies
+}
+
+func (s *CaddySyncService) ConfigureCertificates(store certstore.Store, runtimeDir string) {
+	s.certStore = &store
+	s.certRuntimeDir = runtimeDir
 }
 
 func NewCaddySyncService(db *sql.DB, caddyClient *caddy.Client, hub *agent.Hub, version string) *CaddySyncService {
-	return &CaddySyncService{db: db, caddy: caddyClient, hub: hub, version: version}
+	s := &CaddySyncService{db: db, caddy: caddyClient, hub: hub, version: version, locks: make(map[int64]*sync.Mutex), pending: make(map[int64]configAttempt)}
+	if hub != nil {
+		hub.SetCommandResultHandler(s.commandResult)
+	}
+	return s
 }
 
 // FullSync reads all enabled entities for the local server (server_id=1), builds
@@ -43,10 +67,45 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 	if serverID == 0 {
 		serverID = 1
 	}
+	lock := s.serverLock(serverID)
+	lock.Lock()
+	defer lock.Unlock()
+	state, err := s.State(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if s.attemptActive(serverID) {
+		return nil
+	}
+	revision := state.DesiredRevision
+	if serverID != 1 && (s.hub == nil || !s.hub.IsOnline(serverID)) {
+		return s.mark(ctx, serverID, revision, "queued", "")
+	}
+	if err := s.mark(ctx, serverID, revision, "applying", ""); err != nil {
+		return err
+	}
+	if err := s.applyServer(ctx, serverID, revision); err != nil {
+		if markErr := s.mark(ctx, serverID, revision, "failed", "Configuration application failed; retry or check server connectivity."); markErr != nil {
+			return fmt.Errorf("record application failure: %w", markErr)
+		}
+		return &ConfigApplyError{ServerID: serverID, cause: err}
+	}
+	return nil
+}
+
+func (s *CaddySyncService) applyServer(ctx context.Context, serverID, revision int64) error {
 
 	input, err := s.buildInput(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("build caddy input for server %d: %w", serverID, err)
+	}
+	runtimeDir := s.certRuntimeDir
+	if serverID != 1 {
+		runtimeDir = agentCertDir
+	}
+	certFiles, keep, err := s.prepareCertificates(input, runtimeDir, serverID == 1)
+	if err != nil {
+		return err
 	}
 
 	if serverID == 1 {
@@ -54,14 +113,33 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 		if err != nil {
 			return fmt.Errorf("build caddy config: %w", err)
 		}
-		if err := s.caddy.Load(cfg); err != nil {
+		if err := s.caddy.LoadContext(ctx, cfg); err != nil {
 			return fmt.Errorf("push caddy config: %w", err)
 		}
-		return nil
+		if s.certRuntimeDir != "" {
+			if err := certstore.PruneRuntime(s.certRuntimeDir, keep); err != nil {
+				return fmt.Errorf("retire inactive certificate files: %w", err)
+			}
+		}
+		if s.certStore != nil {
+			allCerts, err := s.loadCertificates(ctx)
+			if err != nil {
+				return err
+			}
+			retained := make(map[string]bool)
+			for _, cert := range allCerts {
+				for _, path := range []*string{cert.CertPath, cert.KeyPath} {
+					if path != nil {
+						retained[filepath.Base(filepath.Dir(*path))] = true
+					}
+				}
+			}
+			if err := certstore.PruneLegacy(s.certStore.Root, retained); err != nil {
+				return fmt.Errorf("retire legacy plaintext sources: %w", err)
+			}
+		}
+		return s.applied(ctx, serverID, revision)
 	}
-
-	// Remote server: use agent-side cert paths and bundle cert bytes.
-	input.AgentCertDir = agentCertDir
 
 	cfg, err := caddy.BuildFullConfig(input)
 	if err != nil {
@@ -73,30 +151,6 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 		return fmt.Errorf("marshal caddy config: %w", err)
 	}
 
-	// Read custom cert files from controller disk and bundle them so the agent
-	// can write them before applying the config.
-	var certFiles []agent.CertFile
-	for _, cert := range input.Certificates {
-		if cert.Provider != "custom" || cert.CertPath == nil || cert.KeyPath == nil {
-			continue
-		}
-		certPEM, err := os.ReadFile(*cert.CertPath)
-		if err != nil {
-			log.Warn().Err(err).Int64("cert_id", cert.ID).Msg("skipping cert: cannot read cert file")
-			continue
-		}
-		keyPEM, err := os.ReadFile(*cert.KeyPath)
-		if err != nil {
-			log.Warn().Err(err).Int64("cert_id", cert.ID).Msg("skipping cert: cannot read key file")
-			continue
-		}
-		certFiles = append(certFiles, agent.CertFile{
-			CertID:  cert.ID,
-			CertPEM: certPEM,
-			KeyPEM:  keyPEM,
-		})
-	}
-
 	syncPayload := agent.ConfigFullSyncPayload{
 		Config: json.RawMessage(configJSON),
 		Certs:  certFiles,
@@ -105,27 +159,83 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 	if err != nil {
 		return fmt.Errorf("build agent message: %w", err)
 	}
-	if !s.hub.Send(serverID, msg) {
-		log.Warn().Int64("server_id", serverID).Msg("agent offline — config queued for next reconnect")
+	msg.ID, err = newCommandID()
+	if err != nil {
+		return err
+	}
+	msg.Revision = revision
+	s.mu.Lock()
+	s.pending[serverID] = configAttempt{ID: msg.ID, Revision: revision, Deadline: time.Now().Add(30 * time.Second)}
+	s.mu.Unlock()
+	if s.hub == nil || !s.hub.Send(serverID, msg) {
+		s.clearAttempt(serverID, msg.ID)
+		return s.mark(ctx, serverID, revision, "queued", "")
 	}
 	return nil
 }
 
-// applyLocalOrResync runs an incremental apply against the local Caddy admin
-// API. Incremental calls target paths like apps/http/servers/https/routes that
-// only exist once a full config has been loaded; if the boot-time sync lost the
-// race with Caddy starting, those paths are absent and the call fails. Rather
-// than leave the change unapplied (the old behaviour, which silently dropped it),
-// fall back to a full POST /load resync that rebuilds the whole structure from
-// the DB.
-func (s *CaddySyncService) applyLocalOrResync(ctx context.Context, incremental func() error) error {
-	if err := incremental(); err != nil {
-		log.Warn().Err(err).Msg("incremental Caddy apply failed; falling back to full resync")
-		if syncErr := s.FullSync(ctx); syncErr != nil {
-			return fmt.Errorf("incremental apply failed (%v) and full resync failed: %w", err, syncErr)
+func (s *CaddySyncService) prepareCertificates(input *caddy.BuildInput, runtimeDir string, local bool) ([]agent.CertFile, map[string]bool, error) {
+	files := make([]agent.CertFile, 0, len(input.Certificates))
+	keep := make(map[string]bool)
+	for n, cert := range input.Certificates {
+		if cert.Provider != "custom" {
+			continue
 		}
+		if s.certStore == nil || runtimeDir == "" || cert.CertPath == nil || cert.KeyPath == nil {
+			return nil, nil, fmt.Errorf("required certificate storage is unavailable")
+		}
+		pair, err := s.certStore.Load(*cert.CertPath, *cert.KeyPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read required certificate %d: %w", cert.ID, err)
+		}
+		var domains []string
+		addDomains := func(raw json.RawMessage) error {
+			var names []string
+			if err := json.Unmarshal(raw, &names); err != nil {
+				return err
+			}
+			domains = append(domains, names...)
+			return nil
+		}
+		for _, host := range input.ProxyHosts {
+			if host.CertificateID != nil && *host.CertificateID == cert.ID && !host.HTTPOnly && !host.TLSPassthrough {
+				if err := addDomains(host.DomainNames); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		for _, host := range input.RedirectionHosts {
+			if host.CertificateID != nil && *host.CertificateID == cert.ID {
+				if err := addDomains(host.DomainNames); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		for _, host := range input.DeadHosts {
+			if !host.HTTPOnly && host.CertificateID != nil && *host.CertificateID == cert.ID {
+				if err := addDomains(host.DomainNames); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		if _, err := certstore.Validate(pair, domains); err != nil {
+			return nil, nil, fmt.Errorf("required certificate %d is invalid: %w", cert.ID, err)
+		}
+		name := certstore.Name(cert.ID, pair)
+		dir := filepath.Join(runtimeDir, name)
+		if local {
+			if _, err := certstore.StageRuntime(runtimeDir, cert.ID, pair); err != nil {
+				return nil, nil, err
+			}
+		}
+		keep[name] = true
+		copy := *cert
+		certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+		copy.CertPath, copy.KeyPath = &certPath, &keyPath
+		input.Certificates[n] = &copy
+		files = append(files, agent.CertFile{CertID: cert.ID, CertPEM: pair.Certificate, KeyPEM: pair.Key})
 	}
-	return nil
+	return files, keep, nil
 }
 
 // Reachable reports whether the local Caddy admin API is responding.
@@ -158,17 +268,46 @@ func (s *CaddySyncService) buildInput(ctx context.Context, serverID int64) (*cad
 	if err != nil {
 		return nil, fmt.Errorf("load certificates: %w", err)
 	}
+	required := make(map[int64]bool)
+	for _, host := range proxyHosts {
+		if host.CertificateID != nil && !host.HTTPOnly && !host.TLSPassthrough {
+			required[*host.CertificateID] = true
+		}
+	}
+	for _, host := range redirectionHosts {
+		if host.CertificateID != nil {
+			required[*host.CertificateID] = true
+		}
+	}
+	for _, host := range deadHosts {
+		if !host.HTTPOnly && host.CertificateID != nil {
+			required[*host.CertificateID] = true
+		}
+	}
+	selected := make([]*models.Certificate, 0, len(required))
+	for _, cert := range certificates {
+		if required[cert.ID] {
+			selected = append(selected, cert)
+			delete(required, cert.ID)
+		}
+	}
+	if len(required) != 0 {
+		return nil, fmt.Errorf("required certificate metadata is missing")
+	}
+	certificates = selected
 
 	accessLists, err := s.loadAccessLists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load access lists: %w", err)
 	}
 
-	// HTTP/2 is per-server; default enabled if the row/column is missing.
 	http2Enabled := 1
-	_ = s.db.QueryRowContext(ctx, `SELECT http2_enabled FROM servers WHERE id = ?`, serverID).Scan(&http2Enabled)
+	if err := s.db.QueryRowContext(ctx, `SELECT http2_enabled FROM servers WHERE id = ?`, serverID).Scan(&http2Enabled); err != nil {
+		return nil, fmt.Errorf("load server settings: %w", err)
+	}
 
 	return &caddy.BuildInput{
+		TrustedProxies:    s.trustedProxies[serverID],
 		ProxyHosts:        proxyHosts,
 		RedirectionHosts:  redirectionHosts,
 		StreamHosts:       streamHosts,
@@ -249,7 +388,7 @@ func (s *CaddySyncService) loadStreamHosts(ctx context.Context, serverID int64) 
 
 func (s *CaddySyncService) loadDeadHosts(ctx context.Context, serverID int64) ([]models.DeadHost, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, server_id, domain_names, status_code, custom_body, enabled, caddy_id, created_at, updated_at
+		SELECT id, server_id, domain_names, status_code, custom_body, certificate_id, access_list_id, http_only, enabled, caddy_id, created_at, updated_at
 		FROM dead_hosts WHERE enabled = 1 AND server_id = ?`, serverID)
 	if err != nil {
 		return nil, err
@@ -260,15 +399,16 @@ func (s *CaddySyncService) loadDeadHosts(ctx context.Context, serverID int64) ([
 	for rows.Next() {
 		var h models.DeadHost
 		var domainNames string
-		var enabled int
+		var enabled, httpOnly int
 		if err := rows.Scan(
-			&h.ID, &h.ServerID, &domainNames, &h.StatusCode, &h.CustomBody, &enabled, &h.CaddyID,
+			&h.ID, &h.ServerID, &domainNames, &h.StatusCode, &h.CustomBody, &h.CertificateID, &h.AccessListID, &httpOnly, &enabled, &h.CaddyID,
 			&h.CreatedAt, &h.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
 		h.DomainNames = json.RawMessage(domainNames)
 		h.Enabled = enabled == 1
+		h.HTTPOnly = httpOnly == 1
 		hosts = append(hosts, h)
 	}
 	return hosts, rows.Err()
@@ -315,6 +455,16 @@ func (s *CaddySyncService) loadAccessLists(ctx context.Context) ([]models.Access
 		if err := rows.Scan(&al.ID, &al.Name, &al.CreatedAt, &al.UpdatedAt); err != nil {
 			return nil, err
 		}
+		lists = append(lists, al)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range lists {
+		al := &lists[i]
 
 		clientRows, err := s.db.QueryContext(ctx, `
 			SELECT id, access_list_id, address, directive, sort_order
@@ -330,9 +480,13 @@ func (s *CaddySyncService) loadAccessLists(ctx context.Context) ([]models.Access
 			}
 			al.Clients = append(al.Clients, c)
 		}
-		clientRows.Close()
-
-		lists = append(lists, al)
+		if err := clientRows.Err(); err != nil {
+			clientRows.Close()
+			return nil, err
+		}
+		if err := clientRows.Close(); err != nil {
+			return nil, err
+		}
 	}
-	return lists, rows.Err()
+	return lists, nil
 }

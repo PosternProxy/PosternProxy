@@ -63,6 +63,7 @@ const router = createRouter({
         {
           path: 'audit-log',
           name: 'audit-log',
+ meta: { adminOnly: true },
           component: () => import('@/views/AuditLogView.vue'),
         },
         {

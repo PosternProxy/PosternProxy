@@ -6,43 +6,42 @@ import (
 	"github.com/posternproxy/posternproxy/internal/models"
 )
 
-// BuildStreamServer generates a Caddy Layer4 server entry for a stream host.
-func BuildStreamServer(h *models.StreamHost) *L4Server {
-	var listen []string
+// BuildStreamServers generates the Caddy Layer4 server(s) for a stream host,
+// keyed by server name. "tcp+udp" yields two servers — one per transport — so
+// each dials its upstream on the matching network. A single proxy upstream dial
+// cannot serve both TCP and UDP, so a combined listener with one dial would
+// forward UDP traffic over TCP.
+func BuildStreamServers(h *models.StreamHost) map[string]*L4Server {
+	key := StreamServerKey(h)
 	switch h.Protocol {
 	case "udp":
-		listen = []string{fmt.Sprintf("udp/:%d", h.IncomingPort)}
+		return map[string]*L4Server{key: streamServer(h, "udp/:", "udp/", false)}
 	case "tcp+udp":
-		listen = []string{
-			fmt.Sprintf(":%d", h.IncomingPort),
-			fmt.Sprintf("udp/:%d", h.IncomingPort),
+		return map[string]*L4Server{
+			key:          streamServer(h, ":", "", true),
+			key + "_udp": streamServer(h, "udp/:", "udp/", false),
 		}
 	default:
-		listen = []string{fmt.Sprintf(":%d", h.IncomingPort)}
+		return map[string]*L4Server{key: streamServer(h, ":", "", true)}
 	}
+}
 
-	upstream := L4Upstream{
-		Dial: []string{fmt.Sprintf("%s:%d", h.ForwardHost, h.ForwardPort)},
-	}
-
-	proxyHandler := L4Handler{
-		Handler:   "proxy",
-		Upstreams: []L4Upstream{upstream},
-	}
-
+// streamServer builds one transport-specific L4 server. listenPrefix and
+// dialNetwork select the transport (e.g. "udp/:" and "udp/"); tcp reports
+// whether an optional TLS SNI matcher applies (SNI is a TCP/TLS concept, so it
+// is never attached to a UDP listener).
+func streamServer(h *models.StreamHost, listenPrefix, dialNetwork string, tcp bool) *L4Server {
 	route := &L4Route{
-		Handle: []L4Handler{proxyHandler},
+		Handle: []L4Handler{{
+			Handler:   "proxy",
+			Upstreams: []L4Upstream{{Dial: []string{fmt.Sprintf("%s%s:%d", dialNetwork, h.ForwardHost, h.ForwardPort)}}},
+		}},
 	}
-
-	// Add SNI matcher for TLS-based routing
-	if h.TCPSNIMatch != nil && *h.TCPSNIMatch != "" {
-		route.Match = []L4Matcher{{
-			TLS: &L4TLSMatcher{SNI: []string{*h.TCPSNIMatch}},
-		}}
+	if tcp && h.TCPSNIMatch != nil && *h.TCPSNIMatch != "" {
+		route.Match = []L4Matcher{{TLS: &L4TLSMatcher{SNI: []string{*h.TCPSNIMatch}}}}
 	}
-
 	return &L4Server{
-		Listen: listen,
+		Listen: []string{fmt.Sprintf("%s%d", listenPrefix, h.IncomingPort)},
 		Routes: []*L4Route{route},
 	}
 }

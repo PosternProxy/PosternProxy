@@ -10,15 +10,15 @@ Stream hosts provide Layer 4 (TCP/UDP) port forwarding via Caddy's `caddy-l4` pl
 ## When to use stream hosts
 
 - Forwarding a database port (PostgreSQL, MySQL, Redis) through the server
-- TCP load balancing for non-HTTP services
+- Forwarding non-HTTP connections to a single upstream
 - Transparent forwarding where the application manages its own TLS
 
 For HTTP/HTTPS traffic, use [Proxy Hosts]({{< relref "/proxy-hosts" >}}) instead. For encrypted traffic that must not be decrypted, use [TLS Passthrough]({{< relref "/proxy-hosts/tls-passthrough" >}}) on a proxy host.
 
 ## Creating a stream host
 
-1. Click **Stream Hosts** in the sidebar
-2. Click **+ Add Stream Host**
+1. Click **Traffic Forwarding** in the sidebar (the former Stream Hosts URL redirects here)
+2. Click **+ Add Rule**
 3. Fill in the form:
 
 | Field | Description |
@@ -43,22 +43,35 @@ For HTTP/HTTPS traffic, use [Proxy Hosts]({{< relref "/proxy-hosts" >}}) instead
 
 ## SNI matching
 
-If **SNI Match** is set, the stream host only accepts TLS connections where the client sends a matching SNI hostname in the ClientHello. This allows multiple stream hosts to share port 443 with regular proxy hosts by distinguishing TLS connections at the L4 level.
+If **SNI Match** is set, the TCP listener only matches TLS connections with that
+hostname in the ClientHello. This does not merge independent stream listeners
+with Caddy's HTTPS listener. Use proxy-host
+[TLS Passthrough]({{< relref "/proxy-hosts/tls-passthrough" >}}) for managed SNI
+routing alongside normal HTTPS on port 443.
 
 Leave blank to accept all connections on the incoming port regardless of SNI.
 
 ## Port conflicts
 
-Each incoming port can only be assigned to one stream host. If you attempt to create a stream host on a port that is already in use (by another stream host or by Caddy's built-in listeners on 80/443), you will receive a validation error.
+Use an unused incoming port on the selected server. The current API validates
+port ranges but does not reliably reject all listener collisions before saving.
+Caddy can reject application after a conflicting rule has been saved. Correct or
+disable the rule and check configuration application status.
 
-Ports 80, 443, and 81 are reserved:
+Avoid ports already used by the installation, including:
 - 80 and 443 are Caddy's default HTTP/HTTPS listeners
-- 81 is the PosternProxy management UI
+- 81 (or your configured management port) is the PosternProxy management UI
+- 2019 is Caddy's local admin API
+
+Open each incoming protocol/port in the host and cloud firewalls. See
+[Traffic Forwarding]({{< relref "/port-forwarding" >}}) for commands.
 
 ## Caddy L4 plugin
 
-Stream hosts require the `github.com/mholt/caddy-l4` plugin, which is included in the Caddy binary built by `scripts/install.sh`.
+Stream hosts require the `github.com/mholt/caddy-l4` plugin, which is included in the Caddy binary installed by `posternproxy install`.
 
 ## Enable / disable
 
-Stream hosts can be enabled or disabled independently. Disabling a stream host removes the Caddy L4 listener immediately, freeing the port.
+Stream hosts can be enabled or disabled independently. Disabling removes the
+managed listener after successful configuration application. Check the
+configuration notice for rejection or offline agents.
