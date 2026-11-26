@@ -1,4 +1,4 @@
-# PosternProxy v0.1.4-beta
+# PosternProxy v0.1.5-beta
 
 This beta adds native Windows services, Linux arm64 bundles and multiarch Docker
 images while retaining native Linux amd64 support. Every native bundle includes
@@ -36,8 +36,8 @@ Linux: `sudo ./posternproxy install --assets-dir .`
 Windows: from elevated PowerShell, `./posternproxy.exe install --assets-dir .`.
 Follow the Windows guide for controller/agent service configuration and removal.
 
-Docker controller: `ghcr.io/posternproxy/posternproxy:v0.1.4-beta`.
-Docker agent: `ghcr.io/posternproxy/posternproxy-agent:v0.1.4-beta`.
+Docker controller: `ghcr.io/posternproxy/posternproxy:v0.1.5-beta`.
+Docker agent: `ghcr.io/posternproxy/posternproxy-agent:v0.1.5-beta`.
 Both images support linux/amd64 and linux/arm64 after the publication workflow
 finishes. The `beta` tag follows the beta channel; this release does not move
 `latest`. Use the version tag for reproducible deployment.

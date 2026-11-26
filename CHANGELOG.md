@@ -7,6 +7,8 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.5-beta] 2026-11-26
+
 - Release IIS-owned HTTP ports on disposable Windows CI runners and check required
   TCP/UDP ports before service qualification starts.
 
@@ -18,8 +20,6 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 - Keep text files, including PowerShell scripts, on LF across platforms to avoid
   Git line-ending conversion warnings on Windows.
-
-## [0.1.4-beta] 2026-11-25
 
 - Invalidate agent transport credentials when their API token or owner authority
   is revoked, and close connected agents after credential changes.
@@ -369,6 +369,7 @@ See the [beta upgrade and recovery guide](https://docs.posternproxy.com/administ
 - Commercial licensing docs updated with real contact email.
 - Install script post-install message now correctly directs users to service logs for the generated password.
 
-[Unreleased]: https://github.com/PosternProxy/PosternProxy/compare/v0.1.3-beta...master
+[Unreleased]: https://github.com/PosternProxy/PosternProxy/compare/v0.1.5-beta...master
+[0.1.5-beta]: https://github.com/PosternProxy/PosternProxy/releases/tag/v0.1.5-beta
 [0.1.3-beta]: https://github.com/PosternProxy/PosternProxy/releases/tag/v0.1.3-beta
 [0.1.0-beta.1]: https://github.com/posternproxy/posternproxy/releases/tag/v0.1.0-beta.1

@@ -49,3 +49,9 @@ SCM/agent/TLS scenario passes, and repeat all gates. Rerunning the existing tagg
 uses the old script. Do not publish the failed v0.1.4-beta candidate or move its
 tag; qualify/tag a new candidate once the changes are accepted. The existing
 owner-runbook clarification remains an independent uncommitted change.
+
+## Updated candidate result
+On 2026-11-26 the owner reported the updated manual Release candidates run all
+green. Package was skipped as designed for workflow_dispatch. The source fixes
+are qualified by that reported run; v0.1.5-beta tagged artifact qualification and
+public installation/publication remain pending.

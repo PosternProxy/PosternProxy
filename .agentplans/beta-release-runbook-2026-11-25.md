@@ -1,7 +1,14 @@
-# Release v0.1.4-beta -- owner runbook
+# Release v0.1.5-beta -- owner runbook
 
-Prepared 2026-11-25. Target is **v0.1.4-beta**: local `v0.1.3-beta` already exists.
-No commit, push, tag or release publication was performed during this preparation.
+Updated 2026-11-26. Target is **v0.1.5-beta**. The earlier v0.1.4-beta tag
+remains on its original candidate; its prepared, unpublished changes are included
+in v0.1.5-beta. Do not move the old tag.
+
+The owner reports the updated manual Release candidates run is all green;
+Package was correctly skipped because that run was manual. Commit and push this
+metadata update before tagging. The tag-triggered run must qualify the exact
+version-stamped artifacts and create the draft. No release has been published
+by this preparation.
 Use the steps in order. Stop on a failed command or failed required Actions job.
 
 ## What is complete
@@ -30,7 +37,7 @@ hardware/source image and Linux race checks remain mandatory in those workflows.
 From PowerShell in `C:\Users\Michael\Repos\PosternProxy`:
 
 ```powershell
-git switch beta-exit
+git branch --show-current
 git status --short
 git diff --check
 git diff --stat
@@ -41,23 +48,25 @@ previous Windows/Linux/Docker work as well as these final fixes. `tmp/`, binarie
 node_modules and generated output are ignored; do not force-add them. Keep secrets
 and private qualification logs out of the commit. Review `.agentplans/` as project
 working evidence. The changelog is already prepared under
-`## [0.1.4-beta] 2026-11-25`, with an empty Unreleased section.
+`## [0.1.5-beta] 2026-11-26`, with an empty Unreleased section.
 
 ```powershell
 git add -A
 git diff --cached --check
 git diff --cached --stat
-git commit -m "Prepare v0.1.4-beta platform support and release qualification"
-git push -u origin beta-exit
+git commit -m "Prepare v0.1.5-beta platform support and release qualification"
+git push
 ```
 
 If your release date changes, use the actual publication date in the changelog.
 
 ## 2. Merge the reviewed candidate and require green CI
 
-Open a pull request **beta-exit -> master** in GitHub. Wait for the complete CI
-suite, review the diff, and merge. Do not bypass failing checks. The remote master
-was behind this local branch; push the branch normally, with no force push.
+The implementation is already merged to master. Commit and push the release
+metadata on the intended release branch. If that is a separate branch, open a
+pull request to master and merge after review and green CI. Otherwise wait for
+the master CI run on the metadata commit. Do not bypass failing checks or force
+push.
 
 ```powershell
 git fetch origin master --tags
@@ -77,9 +86,9 @@ first be on the default branch to expose its Run workflow button.
 ## 3. Create the exact beta tag
 
 ```powershell
-git ls-remote --tags origin refs/tags/v0.1.4-beta
-git tag -a v0.1.4-beta -m "PosternProxy v0.1.4-beta"
-git push origin v0.1.4-beta
+git ls-remote --tags origin refs/tags/v0.1.5-beta
+git tag -a v0.1.5-beta -m "PosternProxy v0.1.5-beta"
+git push origin v0.1.5-beta
 ```
 
 The first command should show no existing tag. If the name already exists, choose
@@ -101,7 +110,7 @@ candidate/tag. Do not publish a partial draft or treat QEMU as native ARM CI.
 
 On GitHub Releases open the generated draft. Confirm tag/commit and **prerelease**;
 do not mark it latest stable. Replace generated notes with the prepared content in
-`beta-v0.1.4-release-notes.md` beside this runbook. Link the installation and beta
+`beta-v0.1.5-release-notes.md` beside this runbook. Link the installation and beta
 limitations pages at your documentation URL.
 
 Required assets:
@@ -172,31 +181,31 @@ In GitHub Packages, ensure **both** `posternproxy` and `posternproxy-agent` are
 public and grant this repository Actions access if required. Normal publication
 uses GITHUB_TOKEN; do not add a personal token unnecessarily. Public pulls must
 work without a login. Do not label `latest` for this beta; workflows update `beta`
-and `v0.1.4-beta` tags.
+and `v0.1.5-beta` tags.
 
 ## 6. Check public download/install and anonymous Docker pulls
 
 From a logged-out browser or clean Linux directory:
 
 ```bash
-curl -fLO https://github.com/PosternProxy/PosternProxy/releases/download/v0.1.4-beta/posternproxy-linux-amd64.tar.gz
-curl -fLO https://github.com/PosternProxy/PosternProxy/releases/download/v0.1.4-beta/checksums.txt
+curl -fLO https://github.com/PosternProxy/PosternProxy/releases/download/v0.1.5-beta/posternproxy-linux-amd64.tar.gz
+curl -fLO https://github.com/PosternProxy/PosternProxy/releases/download/v0.1.5-beta/checksums.txt
 sha256sum --ignore-missing -c checksums.txt
 ```
 
 Repeat the extraction/install smoke from step 4 against the public bundle. Test
 all three public archive links; check that the individual-binary installer can
 fetch its matching agent/Caddy from this same tag. Archive installation always
-uses `--assets-dir .`. Confirm controller and agent both report v0.1.4-beta.
+uses `--assets-dir .`. Confirm controller and agent both report v0.1.5-beta.
 
 Anonymous Docker tests on a Docker host (use an empty temporary auth directory):
 
 ```bash
 docker_auth=$(mktemp -d)
-DOCKER_CONFIG="$docker_auth" docker pull ghcr.io/posternproxy/posternproxy:v0.1.4-beta
-DOCKER_CONFIG="$docker_auth" docker pull ghcr.io/posternproxy/posternproxy-agent:v0.1.4-beta
-DOCKER_CONFIG="$docker_auth" docker manifest inspect ghcr.io/posternproxy/posternproxy:v0.1.4-beta
-DOCKER_CONFIG="$docker_auth" docker manifest inspect ghcr.io/posternproxy/posternproxy-agent:v0.1.4-beta
+DOCKER_CONFIG="$docker_auth" docker pull ghcr.io/posternproxy/posternproxy:v0.1.5-beta
+DOCKER_CONFIG="$docker_auth" docker pull ghcr.io/posternproxy/posternproxy-agent:v0.1.5-beta
+DOCKER_CONFIG="$docker_auth" docker manifest inspect ghcr.io/posternproxy/posternproxy:v0.1.5-beta
+DOCKER_CONFIG="$docker_auth" docker manifest inspect ghcr.io/posternproxy/posternproxy-agent:v0.1.5-beta
 ```
 
 Both manifests must contain linux/amd64 and linux/arm64. Follow the Docker guide
@@ -216,7 +225,7 @@ Custom TLS and emulated-domain tests do not prove public Let's Encrypt issuance.
 Long renewal/outage/multi-server workload soak belongs during this beta before
 production. Do not wait for that entire soak to gather beta feedback.
 
-After these pass, publish/refresh docs for this commit and announce v0.1.4-beta.
+After these pass, publish/refresh docs for this commit and announce v0.1.5-beta.
 Record the release URL, commit, candidate Actions URLs, artifact hashes, Docker
 digests and manual-check results in this directory. Reconcile the blocker ledger
 only after exact-candidate Linux CI is green. If any critical gate fails, keep
