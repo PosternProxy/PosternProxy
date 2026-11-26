@@ -23,6 +23,9 @@ func InstallAgent(ctx context.Context, opts Options, config agentconfig.Config, 
 	if err := opts.Validate(version); err != nil {
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		return installWindows(ctx, opts, &config, version)
+	}
 	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() != 0 {
 		return fmt.Errorf("agent installation requires root on Linux amd64 or arm64")
 	}

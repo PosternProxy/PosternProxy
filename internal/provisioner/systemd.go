@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"debug/buildinfo"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/posternproxy/posternproxy/internal/agentconfig"
 	"github.com/posternproxy/posternproxy/internal/caddybuild"
@@ -29,17 +31,42 @@ func installSystemdAgent(input ProvisionInput, c *sshClient, log func(string)) e
 	if err != nil {
 		return err
 	}
-	agentPath, err := selectArtifact(input.AgentBinPath, "posternproxy-agent", arch, false)
-	if err != nil {
-		return err
-	}
+	agentPath, agentErr := selectArtifact(input.AgentBinPath, "posternproxy-agent", arch, false)
 	caddyConfigured := input.CaddyBinPath
 	if caddyConfigured == "" {
 		caddyConfigured = filepath.Join(filepath.Dir(agentPath), "caddy")
 	}
-	caddyPath, err := selectArtifact(caddyConfigured, "caddy", arch, true)
-	if err != nil {
-		return err
+	caddyPath, caddyErr := selectArtifact(caddyConfigured, "caddy", arch, true)
+	if agentErr != nil || caddyErr != nil {
+		if input.ArtifactCacheDir == "" {
+			return fmt.Errorf("matching Linux provisioning assets are unavailable")
+		}
+		if err := os.MkdirAll(input.ArtifactCacheDir, 0700); err != nil {
+			return err
+		}
+		stage, err := os.MkdirTemp(input.ArtifactCacheDir, "provision-assets-*")
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := os.RemoveAll(stage); err != nil {
+				log("Provisioning asset staging cleanup failed.")
+			}
+		}()
+		downloadCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		log("Fetching matching verified Linux provisioning assets for this controller release.")
+		if err := installer.StageLinuxAgentAssets(downloadCtx, stage, input.Version, arch); err != nil {
+			return err
+		}
+		agentPath, err = selectArtifact(filepath.Join(stage, "posternproxy-agent"), "posternproxy-agent", arch, false)
+		if err != nil {
+			return err
+		}
+		caddyPath, err = selectArtifact(filepath.Join(stage, "caddy"), "caddy", arch, true)
+		if err != nil {
+			return err
+		}
 	}
 	output, err = c.output("id -u")
 	if err != nil {

@@ -65,13 +65,14 @@ type ProvisionInput struct {
 	SSHAuthMethod  string
 	SSHCredentials string
 
-	ControllerURL  string // wss://host:81 — sent to agent config
-	AgentToken     string // pre-shared token
-	ServerID       int64  // numeric server ID — required for Docker mode
-	AgentBinPath   string // local path to the caddyproxy-agent binary to SCP (systemd mode only)
-	CaddyBinPath   string
-	Version        string
-	DeploymentType string // "systemd" (default) | "docker"
+	ControllerURL    string // wss://host:81 — sent to agent config
+	AgentToken       string // pre-shared token
+	ServerID         int64  // numeric server ID — required for Docker mode
+	AgentBinPath     string // local path to the caddyproxy-agent binary to SCP (systemd mode only)
+	ArtifactCacheDir string
+	CaddyBinPath     string
+	Version          string
+	DeploymentType   string // "systemd" (default) | "docker"
 
 	// TOFU: SSHHostKey is the previously stored SHA256 fingerprint.
 	// Empty means first connection — accept any key and call OnHostKeyAccepted.

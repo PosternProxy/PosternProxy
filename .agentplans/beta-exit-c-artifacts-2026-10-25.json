@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-25 America/Indianapolis",
+  "head": "380b6d0218970360443aa1bea45849347a22470a",
+  "working_tree": "uncommitted; pre-existing work retained",
+  "local_platform": "windows/amd64",
+  "caddy_sha256": "fa392b264158fce8556db2f39f1a5aa6d9b7141bcc6b6036893fad292a21d224",
+  "agent_sha256": "2a26d677738dae05c8d23112856fb4b26e18dcf5687acc4796b07035a02a4879",
+  "source_files": [
+    {
+      "path": "internal/database/migrations/003_config_state.sql",
+      "sha256": "46e037a01cd5cb44e20cae852c4ef548c13fd2601965ab365e256213c7c36522"
+    },
+    {
+      "path": "internal/services/config_state.go",
+      "sha256": "5cd7f3ae9045bb254630fe7f42b314e95e59bb13050c487ef1a43f4d55e98402"
+    },
+    {
+      "path": "internal/services/caddy_sync.go",
+      "sha256": "3241ab6b49653de14144426303a3c002b43ac75247bcce98682b2a691bd2413d"
+    },
+    {
+      "path": "internal/services/config_history.go",
+      "sha256": "04df9a1a6f501109bbe8c458fc1f35cb64b7399f78783a14d09da175d32f8dd6"
+    },
+    {
+      "path": "internal/agent/protocol.go",
+      "sha256": "8529be6251be1ca24a068d29bad1dda2c93431a0be1b952456191cf6c47e32cd"
+    },
+    {
+      "path": "cmd/posternproxy-agent/main.go",
+      "sha256": "be9b4e0da7c49c4c25e4d065bc516499800dd33585b3d633d49ae7d0eccb05ab"
+    },
+    {
+      "path": "internal/services/config_state_test.go",
+      "sha256": "1fbb6a423ddc82bec336721165c8198a773f43f89549b40e222a7c1c65ded37b"
+    },
+    {
+      "path": "internal/services/config_acceptance_test.go",
+      "sha256": "388ee2ea144e387ea6af09f32130e3de6cb8d9d1728009f31cd0dcb6212f9bec"
+    },
+    {
+      "path": "frontend/src/components/ConfigurationStatus.vue",
+      "sha256": "36bcd307599f845e9e12949549349158796b43b6ea07e200a480d7fd4d0ab221"
+    }
+  ]
+}

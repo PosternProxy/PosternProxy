@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, beta-exit, 'codex/**']
+  workflow_dispatch:
+  workflow_call:
   pull_request:
     branches: [master]
 

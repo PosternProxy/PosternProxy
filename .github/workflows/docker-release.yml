@@ -1,0 +1,67 @@
+name: Publish qualified Docker images
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      packages: write
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      IMAGE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Build images
+        run: |
+          docker build -f docker/Dockerfile --build-arg VERSION="$RELEASE_VERSION" -t posternproxy-smoke-controller .
+          docker build -f docker/Dockerfile.agent --build-arg VERSION="$RELEASE_VERSION" -t posternproxy-smoke-agent .
+      - name: Test the exact images before pushing
+        run: python3 scripts/docker-smoke.py --controller-image posternproxy-smoke-controller --agent-image posternproxy-smoke-agent --version "$RELEASE_VERSION"
+      - name: Publish tested architecture images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag posternproxy-smoke-controller "$image:$RELEASE_VERSION-$IMAGE_ARCH"
+          docker tag posternproxy-smoke-agent "$image-agent:$RELEASE_VERSION-$IMAGE_ARCH"
+          docker push "$image:$RELEASE_VERSION-$IMAGE_ARCH"
+          docker push "$image-agent:$RELEASE_VERSION-$IMAGE_ARCH"
+
+  manifests:
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      IS_PRERELEASE: ${{ github.event.release.prerelease }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Publish multiarch version and channel tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          channel=latest
+          if [[ "$IS_PRERELEASE" == true ]]; then channel=beta; fi
+          for image in "ghcr.io/${GITHUB_REPOSITORY,,}" "ghcr.io/${GITHUB_REPOSITORY,,}-agent"; do
+            docker buildx imagetools create --tag "$image:$RELEASE_VERSION" --tag "$image:$channel" "$image:$RELEASE_VERSION-amd64" "$image:$RELEASE_VERSION-arm64"
+          done

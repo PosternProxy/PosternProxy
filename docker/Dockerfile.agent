@@ -11,19 +11,21 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /posternproxy-agent ./cmd/posternproxy-agent
+RUN . internal/caddybuild/build.sh \
+    && GOTOOLCHAIN="$CADDY_GO_TOOLCHAIN" CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /posternproxy-agent ./cmd/posternproxy-agent
 
 # Stage 3: Runtime image
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates iptables \
+    ca-certificates wget iptables \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=caddy-builder /usr/local/bin/caddy /usr/local/bin/caddy
 COPY --from=agent-builder /posternproxy-agent /usr/local/bin/posternproxy-agent
 COPY docker/entrypoint-agent.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && mkdir -p /data/certs
+COPY docker/supervise.sh /usr/local/lib/posternproxy/supervise.sh
+RUN chmod +x /entrypoint.sh /usr/local/lib/posternproxy/supervise.sh && mkdir -p /data/certs
 
 VOLUME /data
-EXPOSE 80 443
+EXPOSE 80 443 443/udp
 
 ENTRYPOINT ["/entrypoint.sh"]

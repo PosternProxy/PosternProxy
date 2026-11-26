@@ -6,11 +6,12 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
       - "81:81"
     volumes:
       - posternproxy_data:/data
     environment:
-      POSTERNPROXY_JWT_SECRET: ${POSTERNPROXY_JWT_SECRET:?Set POSTERNPROXY_JWT_SECRET in .env — generate with: openssl rand -hex 32}
+      POSTERNPROXY_JWT_SECRET: "${POSTERNPROXY_JWT_SECRET:?Set POSTERNPROXY_JWT_SECRET in .env — generate with: openssl rand -hex 32}"
       POSTERNPROXY_CONTROLLER_URL: ${POSTERNPROXY_CONTROLLER_URL:-}
       POSTERNPROXY_ADMIN_EMAIL: ${POSTERNPROXY_ADMIN_EMAIL:-admin@posternproxy.local}
       POSTERNPROXY_ADMIN_PASSWORD: ${POSTERNPROXY_ADMIN_PASSWORD:-}

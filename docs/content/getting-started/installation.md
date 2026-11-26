@@ -5,7 +5,11 @@ weight: 1
 
 # Installation
 
-PosternProxy installs directly on Debian 11/12 or Ubuntu 22.04/24.04. No Docker required.
+Native installation uses systemd on Debian/Ubuntu or
+[Windows services]({{< relref "/getting-started/windows" >}}), and
+[Docker images]({{< relref "/getting-started/docker" >}}) are published for
+amd64/arm64. Release targets are native Linux amd64 and arm64, Windows amd64,
+and Docker amd64/arm64.
 
 ## Prerequisites
 
@@ -22,8 +26,16 @@ releases do not gain the command automatically.
 
 ### Install from a bundle (`.tar.gz`)
 
-Copy the supplied `posternproxy-linux-amd64.tar.gz` bundle to your server. Use
-an `arm64` bundle on ARM servers. Extract it in a dedicated directory and install:
+{{% hint info %}}
+**Which architecture?**
+Both native Linux architectures have release bundles. Use
+`posternproxy-linux-amd64.tar.gz` on x86-64 servers or
+`posternproxy-linux-arm64.tar.gz` on ARM64 servers. Run `uname -m` if unsure:
+`x86_64` means amd64; `aarch64` means arm64. The commands below use amd64.
+{{% /hint %}}
+
+Copy the matching bundle to your server.
+Extract it in a dedicated directory and install:
 
 ```bash
 mkdir -p posternproxy-install
@@ -43,7 +55,7 @@ The archive contains these four files:
 | `checksums.txt` | SHA-256 checksums for the binaries |
 
 The extracted executable is named **`posternproxy`**, not
-`posternproxy-linux-amd64`. Keep `--assets-dir .` in the command: it uses the
+`posternproxy-linux-amd64` or `posternproxy-linux-arm64`. Keep `--assets-dir .` in the command: it uses the
 extracted assets and works with unreleased source builds that have no matching
 published release. No additional binary downloads occur; OS packages still use APT.
 
@@ -53,18 +65,18 @@ start an agent service on the controller. Remote nodes need this agent and Caddy
 for their architecture; see [Provisioning]({{< relref "/multi-server/provisioning" >}})
 for the separate remote setup and its current beta limitations.
 
-{{< hint info >}}
+{{% hint info %}}
 **Prefer to build it yourself?**
 See [Building from source]({{< relref "/getting-started/building-from-source" >}})
 for building the binaries on Linux or Windows.
-{{< /hint >}}
+{{% /hint %}}
 
 ### Install an individual release binary
 
 If you downloaded an individual controller instead of an archive from the
 [GitHub releases page](https://github.com/PosternProxy/PosternProxy/releases/),
-choose `posternproxy-linux-amd64` for most servers or `posternproxy-linux-arm64`
-for ARM. Verify it against the release's `checksums.txt`, then rename it to the
+choose `posternproxy-linux-amd64` or `posternproxy-linux-arm64` for your server.
+Verify against `checksums.txt`, then rename it to the
 same command name used in the examples:
 
 ```bash
@@ -170,12 +182,12 @@ database preserves its credentials and does not display or reset its password.
 Log in with the displayed credentials, then change the password. Direct runs and
 containers still use the startup banner when no initial password is configured.
 
-{{< hint info >}}
+{{% hint info %}}
 **Setting a fixed admin password**
 Set `POSTERNPROXY_ADMIN_PASSWORD` in `/etc/posternproxy/config.env` before the first boot to use a specific password instead of a generated one.
-{{< /hint >}}
+{{% /hint %}}
 
-{{< hint warning >}}
+{{% hint warning %}}
 **Lost the generated password?**
 If you missed the banner, use the `reset-password` subcommand to recover access without running the server. Run it as the `posternproxy` user with the config loaded, so it uses the correct database path and does not create root-owned database files:
 
@@ -187,7 +199,7 @@ sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; \
 ```
 
 A new random password is printed to the terminal.
-{{< /hint >}}
+{{% /hint %}}
 
 ## Environment variables
 

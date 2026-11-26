@@ -26,9 +26,10 @@ var upgrader = websocket.Upgrader{
 
 // AgentConn represents one connected agent.
 type AgentConn struct {
-	serverID int64
-	conn     *websocket.Conn
-	send     chan Message
+	serverID  int64
+	conn      *websocket.Conn
+	send      chan Message
+	authorize func() bool
 }
 
 // Hub is the controller-side registry of connected agents.
@@ -70,7 +71,7 @@ func NewHub(onStatus func(int64, StatusPayload), onConnect func(int64)) *Hub {
 
 // ServeWS upgrades an HTTP connection to a WebSocket and registers the agent.
 // serverID must have been validated by the caller (token check in handler).
-func (h *Hub) ServeWS(serverID int64, w http.ResponseWriter, r *http.Request) {
+func (h *Hub) ServeWS(serverID int64, w http.ResponseWriter, r *http.Request, authorize func() bool) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Int64("server_id", serverID).Msg("ws upgrade failed")
@@ -78,9 +79,10 @@ func (h *Hub) ServeWS(serverID int64, w http.ResponseWriter, r *http.Request) {
 	}
 
 	ac := &AgentConn{
-		serverID: serverID,
-		conn:     conn,
-		send:     make(chan Message, 64),
+		serverID:  serverID,
+		authorize: authorize,
+		conn:      conn,
+		send:      make(chan Message, 64),
 	}
 
 	h.mu.Lock()
@@ -150,6 +152,8 @@ func (h *Hub) MarkOnlineForTest(serverID int64) {
 
 func (ac *AgentConn) writePump() {
 	ticker := time.NewTicker(pingPeriod)
+	authority := time.NewTicker(time.Second)
+	defer authority.Stop()
 	defer func() {
 		ticker.Stop()
 		ac.conn.Close()
@@ -157,7 +161,14 @@ func (ac *AgentConn) writePump() {
 
 	for {
 		select {
+		case <-authority.C:
+			if !ac.authorized() {
+				return
+			}
 		case msg, ok := <-ac.send:
+			if !ac.authorized() {
+				return
+			}
 			ac.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				ac.conn.WriteMessage(websocket.CloseMessage, []byte{})
@@ -201,6 +212,9 @@ func (ac *AgentConn) readPump(h *Hub) {
 			}
 			return
 		}
+		if !ac.authorized() {
+			return
+		}
 		h.handleAgentMessage(ac, msg)
 	}
 }
@@ -228,3 +242,5 @@ func (h *Hub) handleAgentMessage(ac *AgentConn, msg Message) {
 		log.Debug().Int64("server_id", ac.serverID).Msg("health report received")
 	}
 }
+
+func (ac *AgentConn) authorized() bool { return ac.authorize == nil || ac.authorize() }

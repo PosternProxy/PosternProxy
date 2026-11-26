@@ -129,7 +129,7 @@ func acceptancePort(t *testing.T) int {
 
 func eventuallyAcceptance(t *testing.T, description string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(12 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !condition() {
 		if time.Now().After(deadline) {
 			t.Fatal(description)
@@ -155,7 +155,7 @@ func acceptanceCaddyNode(t *testing.T, binary string) (int, string, func()) {
 		return startAcceptanceProcess(t, binary, []string{"run", "--config", configPath}, []string{"XDG_DATA_HOME=" + dir, "XDG_CONFIG_HOME=" + dir})
 	}
 	stopCaddy := startCaddy()
-	client := &http.Client{Timeout: time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	eventuallyAcceptance(t, "Caddy did not start", func() bool {
 		response, err := client.Get("http://" + adminAddress + "/config/")
 		if err != nil {

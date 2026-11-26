@@ -47,6 +47,24 @@ func TestReadChecksums(t *testing.T) {
 	}
 }
 
+func TestLinuxProvisioningDownloadRequiresReleaseAndArchitecture(t *testing.T) {
+	for _, tc := range []struct{ version, arch string }{
+		{"dev", "arm64"}, {"v1.0.0-dirty", "arm64"},
+		{"v1.0.0-3-gabcdef", "arm64"}, {"v1.0.0", "386"},
+	} {
+		t.Run(tc.version+"/"+tc.arch, func(t *testing.T) {
+			destination := t.TempDir()
+			if err := StageLinuxAgentAssets(context.Background(), destination, tc.version, tc.arch); err == nil {
+				t.Fatal("unsupported download accepted")
+			}
+			files, err := os.ReadDir(destination)
+			if err != nil || len(files) != 0 {
+				t.Fatalf("download refusal touched staging: files=%d err=%v", len(files), err)
+			}
+		})
+	}
+}
+
 func TestVerifyChecksumDetectsChangedAsset(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "caddy")
 	data := []byte("verified artifact")

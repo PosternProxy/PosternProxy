@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -19,16 +20,17 @@ import (
 
 // ServerService manages the servers table and orchestrates provisioning.
 type ServerService struct {
-	db            *sql.DB
-	audit         *AuditService
-	hub           *agent.Hub
-	tokens        *APITokenService
-	caddy         *caddy.Client // local Caddy admin API, for the local server's liveness
-	encKey        [32]byte
-	controllerURL string // e.g. "wss://my-controller:81" — sent to agent config
-	caddyBinPath  string
-	version       string
-	agentBinPath  string // optional; path to local caddyproxy-agent binary
+	db               *sql.DB
+	audit            *AuditService
+	hub              *agent.Hub
+	tokens           *APITokenService
+	caddy            *caddy.Client // local Caddy admin API, for the local server's liveness
+	encKey           [32]byte
+	controllerURL    string // e.g. "wss://my-controller:81" — sent to agent config
+	caddyBinPath     string
+	version          string
+	agentBinPath     string // optional; path to local caddyproxy-agent binary
+	artifactCacheDir string
 
 	// runsMu protects runs.
 	// runs holds the active or most-recent ProvisionRun per server. An entry
@@ -229,18 +231,19 @@ func (s *ServerService) Create(ctx context.Context, callerID *int64, input model
 	}
 
 	pInput := provisioner.ProvisionInput{
-		Host:           input.Hostname,
-		SSHPort:        input.SSHPort,
-		SSHUser:        input.SSHUser,
-		SSHAuthMethod:  input.SSHAuthMethod,
-		SSHCredentials: input.SSHCredentials,
-		ControllerURL:  s.controllerURL,
-		AgentToken:     token,
-		ServerID:       id,
-		AgentBinPath:   s.agentBinPath,
-		CaddyBinPath:   s.caddyBinPath,
-		Version:        s.version,
-		DeploymentType: deploymentType,
+		Host:             input.Hostname,
+		SSHPort:          input.SSHPort,
+		SSHUser:          input.SSHUser,
+		SSHAuthMethod:    input.SSHAuthMethod,
+		SSHCredentials:   input.SSHCredentials,
+		ControllerURL:    s.controllerURL,
+		AgentToken:       token,
+		ServerID:         id,
+		AgentBinPath:     s.agentBinPath,
+		ArtifactCacheDir: s.artifactCacheDir,
+		CaddyBinPath:     s.caddyBinPath,
+		Version:          s.version,
+		DeploymentType:   deploymentType,
 		// SSHHostKey is empty on first provision — TOFU will accept and persist the key.
 		OnHostKeyAccepted: func(fp string) {
 			// Background work — request context would cancel host-key persistence if the user navigated away.
@@ -425,18 +428,19 @@ func (s *ServerService) Reprovision(ctx context.Context, callerID *int64, id int
 	}
 
 	pInput := provisioner.ProvisionInput{
-		Host:           srv.Hostname,
-		SSHPort:        srv.SSHPort,
-		SSHUser:        srv.SSHUser,
-		SSHAuthMethod:  srv.SSHAuthMethod,
-		SSHCredentials: creds,
-		ControllerURL:  s.controllerURL,
-		AgentToken:     token,
-		ServerID:       id,
-		AgentBinPath:   s.agentBinPath,
-		CaddyBinPath:   s.caddyBinPath,
-		Version:        s.version,
-		DeploymentType: srv.DeploymentType,
+		Host:             srv.Hostname,
+		SSHPort:          srv.SSHPort,
+		SSHUser:          srv.SSHUser,
+		SSHAuthMethod:    srv.SSHAuthMethod,
+		SSHCredentials:   creds,
+		ControllerURL:    s.controllerURL,
+		AgentToken:       token,
+		ServerID:         id,
+		AgentBinPath:     s.agentBinPath,
+		ArtifactCacheDir: s.artifactCacheDir,
+		CaddyBinPath:     s.caddyBinPath,
+		Version:          s.version,
+		DeploymentType:   srv.DeploymentType,
 		// SSHHostKey may be empty for servers provisioned before TOFU was introduced;
 		// in that case we fall back to TOFU and store the key going forward.
 		SSHHostKey: srv.SSHHostKey,
@@ -554,14 +558,31 @@ var dummyAgentTokenHash = func() string {
 // for the given server. Returns true on success. Runs in roughly constant
 // time regardless of whether serverID exists, to prevent ID enumeration.
 func (s *ServerService) ValidateAgentToken(ctx context.Context, serverID int64, token string) bool {
+	_, valid := s.AgentAuthorization(ctx, serverID, token)
+	return valid
+}
+
+// AgentAuthorization binds a connection to the credential that authenticated it.
+func (s *ServerService) AgentAuthorization(ctx context.Context, serverID int64, token string) (func() bool, bool) {
 	var hash string
 	err := s.db.QueryRowContext(ctx, `SELECT agent_token_hash FROM servers WHERE id=?`, serverID).Scan(&hash)
 	if err != nil || hash == "" {
 		// Run bcrypt against a dummy hash so timing matches the happy path.
 		_ = security.BcryptCompare(dummyAgentTokenHash, token)
-		return false
+		return nil, false
 	}
-	return security.BcryptCompare(hash, token) == nil
+	if security.BcryptCompare(hash, token) != nil {
+		return nil, false
+	}
+	return func() bool {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var current string
+		if err := s.db.QueryRowContext(checkCtx, `SELECT agent_token_hash FROM servers WHERE id=?`, serverID).Scan(&current); err != nil {
+			return false
+		}
+		return subtle.ConstantTimeCompare([]byte(hash), []byte(current)) == 1
+	}, true
 }
 
 func (s *ServerService) AuditResync(ctx context.Context, actorID, serverID int64, ip string) {
@@ -615,6 +636,8 @@ func (s *ServerService) ConfigureArtifacts(caddyPath, version string) {
 	s.caddyBinPath = caddyPath
 	s.version = version
 }
+
+func (s *ServerService) ConfigureArtifactCache(path string) { s.artifactCacheDir = path }
 
 func (s *ServerService) AgentCredentials(ctx context.Context, actorID *int64, id int64, ip string) (*agentconfig.Config, error) {
 	if id <= 1 {

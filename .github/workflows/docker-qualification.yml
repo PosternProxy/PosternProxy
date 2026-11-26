@@ -1,0 +1,33 @@
+name: Docker qualification
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-test' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build images on their native architecture
+        run: |
+          docker build -f docker/Dockerfile --build-arg VERSION="$RELEASE_VERSION" -t posternproxy-smoke-controller .
+          docker build -f docker/Dockerfile.agent --build-arg VERSION="$RELEASE_VERSION" -t posternproxy-smoke-agent .
+      - name: Qualify Compose, enrollment, TLS, persistent storage and restart recovery
+        run: python3 scripts/docker-smoke.py --controller-image posternproxy-smoke-controller --agent-image posternproxy-smoke-agent --version "$RELEASE_VERSION"

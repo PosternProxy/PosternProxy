@@ -106,6 +106,16 @@ func NewBackupService(db *sql.DB, syncSvc *CaddySyncService) *BackupService {
 
 // Export dumps all configured tables to a BackupPayload.
 func (s *BackupService) Export(ctx context.Context) (*BackupPayload, error) {
+	payload, _, err := s.exportSnapshot(ctx)
+	return payload, err
+}
+
+func (s *BackupService) exportSnapshot(ctx context.Context) (*BackupPayload, []portableServer, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
 	payload := &BackupPayload{
 		Version:    backupVersion,
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
@@ -113,14 +123,35 @@ func (s *BackupService) Export(ctx context.Context) (*BackupPayload, error) {
 	}
 
 	for _, table := range tableOrder {
-		rows, err := s.dumpTable(ctx, table)
+		rows, err := dumpTable(ctx, tx, table)
 		if err != nil {
-			return nil, fmt.Errorf("dump %s: %w", table, err)
+			return nil, nil, fmt.Errorf("dump %s: %w", table, err)
 		}
 		payload.Tables[table] = rows
 	}
 
-	return payload, nil
+	rows, err := tx.QueryContext(ctx, `SELECT id,name,hostname,is_local FROM servers ORDER BY id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	var servers []portableServer
+	for rows.Next() {
+		var srv portableServer
+		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.Local); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		servers = append(servers, srv)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return payload, servers, nil
 }
 
 // Import restores a BackupPayload into the database and re-syncs Caddy.
@@ -153,8 +184,8 @@ func (s *BackupService) ConfigurationStates(ctx context.Context) ([]ConfigState,
 }
 
 // dumpTable returns all rows from a table as a slice of generic maps.
-func (s *BackupService) dumpTable(ctx context.Context, table string) ([]map[string]any, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT * FROM "+table) //nolint:gosec
+func dumpTable(ctx context.Context, tx *sql.Tx, table string) ([]map[string]any, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+table) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}

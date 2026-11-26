@@ -62,30 +62,13 @@ func (s *BackupService) ExportPortable(ctx context.Context, passphrase string) (
 	if err != nil {
 		return nil, err
 	}
-	config, err := s.Export(ctx)
+	config, servers, err := s.exportSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
 	// Runtime configuration and enrollment remain properties of the destination.
 	config.Tables["settings"] = nil
-	payload := portablePayload{Config: *config, Certificates: make(map[int64]certstore.Pair)}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,hostname,is_local FROM servers ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var srv portableServer
-		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.Local); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		payload.Servers = append(payload.Servers, srv)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
+	payload := portablePayload{Config: *config, Servers: servers, Certificates: make(map[int64]certstore.Pair)}
 	for _, row := range config.Tables["certificates"] {
 		if row["provider"] != "custom" {
 			continue

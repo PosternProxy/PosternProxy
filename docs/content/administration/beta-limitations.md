@@ -10,12 +10,25 @@ are separate outcomes. Use
 [release validation]({{< relref "/administration/release-validation" >}}) before
 deployment.
 
+Windows amd64 service installation and native Linux amd64/arm64 packaging are now
+implemented, with native qualification jobs and Docker/Compose smoke tests in
+the release workflows. Controller/agent Windows service lifecycle and custom TLS
+passed on an authorized workstation using the development bundle. Ubuntu amd64
+native installation/provisioning and source-built Docker/Compose checks pass.
+ARM64 installer and container functional checks also pass under QEMU; container
+runtime checks used verified cross-built binaries. Candidate runner checks and
+native ARM hardware qualification are still required;
+local unit tests and cross-compilation are not platform qualification. Tagged
+workflows create drafts after qualification; Docker publishing starts only after
+the owner publishes the GitHub release. No release was published by this work.
+
 The current development archive has been exercised on an Ubuntu 24.04 amd64 VM:
 existing-controller upgrade/rerun, fresh controller data and printed login,
 native agent installation, actual SSH provisioning, custom TLS, service-user
-certificate permissions and service restarts. Fresh OS package installation,
-other OS/CPU combinations, container deployments, published downloads and
-historical beta database upgrades still require their own qualification.
+certificate permissions and service restarts. Container development qualification
+is described above. Exact published downloads remain a release gate. Other
+Linux distributions and historical beta database upgrades are outside the
+qualified scope; retain an offline installation backup before experimenting.
 
 Certificate validation, encrypted source storage, per-target distribution,
 restricted runtime files, manual enrollment, applied provisioning readiness,

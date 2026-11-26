@@ -1,6 +1,6 @@
 ---
 title: Quick Start
-weight: 2
+weight: 4
 ---
 
 # Quick Start
@@ -25,10 +25,10 @@ Log in with:
 
 Immediately navigate to **Users → (your account) → Change Password** and set a strong password.
 
-{{< hint info >}}
+{{% hint info %}}
 **Can't find the password?** Run `reset-password` on the server (as the `posternproxy` user, with the config loaded) to generate and print a new one without restarting the service:
 `sudo -u posternproxy bash -c 'set -a; . /etc/posternproxy/config.env; set +a; /usr/local/bin/posternproxy reset-password'`
-{{< /hint >}}
+{{% /hint %}}
 
 ## 2. Add your first proxy host
 

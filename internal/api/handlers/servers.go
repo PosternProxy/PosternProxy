@@ -357,38 +357,39 @@ func (h *ServerHandler) ResetJoin(w http.ResponseWriter, r *http.Request) {
 //
 // All failure cases return an identical 401 to prevent server ID enumeration.
 func (h *ServerHandler) AgentConnect(w http.ResponseWriter, r *http.Request) {
-	serverID, ok := h.authenticatedAgent(r)
+	serverID, authorize, ok := h.authenticatedAgent(r)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	h.hub.ServeWS(serverID, w, r)
+	h.hub.ServeWS(serverID, w, r, authorize)
 }
 
 func (h *ServerHandler) VerifyAgent(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authenticatedAgent(r); !ok {
+	if _, _, ok := h.authenticatedAgent(r); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *ServerHandler) authenticatedAgent(r *http.Request) (int64, bool) {
+func (h *ServerHandler) authenticatedAgent(r *http.Request) (int64, func() bool, bool) {
 	serverIDStr := r.URL.Query().Get("server_id")
 	parts := strings.Fields(r.Header.Get("Authorization"))
 	if r.URL.Query().Has("token") || len(r.Header.Values("Authorization")) != 1 || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return 0, false
+		return 0, nil, false
 	}
 	token := parts[1]
 
 	// ParseInt returning an error yields serverID == 0, which ValidateAgentToken
 	// safely rejects (no row + dummy bcrypt). No need for a separate branch.
 	serverID, _ := strconv.ParseInt(serverIDStr, 10, 64)
-	if !h.svc.ValidateAgentToken(r.Context(), serverID, token) {
-		return 0, false
+	authorize, valid := h.svc.AgentAuthorization(r.Context(), serverID, token)
+	if !valid {
+		return 0, nil, false
 	}
 
-	return serverID, true
+	return serverID, authorize, true
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

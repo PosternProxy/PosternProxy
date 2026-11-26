@@ -13,7 +13,15 @@ export default defineConfig({
     screenshot: 'off',
     video: 'off',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', testIgnore: '**/https.spec.ts', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium-https', testMatch: '**/https.spec.ts', use: {
+      ...devices['Desktop Chrome'],
+      baseURL: 'https://cert-upload.e2e.test:18184',
+      ignoreHTTPSErrors: true,
+      launchOptions: { args: ['--host-resolver-rules=MAP cert-upload.e2e.test 127.0.0.1, MAP attacker.test 127.0.0.1', '--no-proxy-server'] },
+    } },
+  ],
   webServer: {
     command: 'node e2e/start-server.mjs',
     url: 'http://127.0.0.1:18180',

@@ -2,12 +2,14 @@ package api_test
 
 import (
 	"context"
+	"github.com/posternproxy/posternproxy/internal/models"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/posternproxy/posternproxy/internal/agent"
@@ -102,5 +104,121 @@ func TestAgentHeaderAuthentication(t *testing.T) {
 	}
 	if resp != nil {
 		resp.Body.Close()
+	}
+}
+
+func TestAgentRevocationThroughAPI(t *testing.T) {
+	for _, change := range []string{"revoke", "disable", "password", "role", "rotate"} {
+		t.Run(change, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := database.Open(filepath.Join(t.TempDir(), "revoke.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			audit := services.NewAuditService(db)
+			users := services.NewUserService(db, audit)
+			owner, err := users.Create(ctx, nil, models.CreateUserInput{Email: "owner@test.invalid", Name: "Owner", Password: "test-password", Role: "admin"}, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := db.Exec(`INSERT INTO servers(name,hostname) VALUES ('remote','remote.test')`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, err := result.LastInsertId()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens := services.NewAPITokenService(db)
+			raw, err := tokens.CreateForServer(ctx, id, &owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hub := agent.NewHub(nil, nil)
+			svc := services.NewServerService(db, audit, hub, tokens, nil, [32]byte{}, "", "")
+			router := api.NewRouter(api.RouterConfig{DB: db, JWTSecret: "test-secret", UserService: users, AuditService: audit, APITokenService: tokens, SessionService: services.NewSessionService(db, "test-secret"), ServerService: svc, Hub: hub})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/agent?server_id=" + strconv.FormatInt(id, 10)
+			headers := http.Header{"Authorization": {"Bearer " + raw}}
+			conn, resp, err := websocket.DefaultDialer.Dial(endpoint, headers)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			switch change {
+			case "revoke":
+				operator, err := tokens.Create(ctx, owner.ID, "admin", models.CreateAPITokenInput{Name: "operator", Scopes: []string{"write"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var tokenID int64
+				if err := db.QueryRow(`SELECT id FROM api_tokens WHERE server_id=? AND revoked_at IS NULL`, id).Scan(&tokenID); err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("DELETE", "/api/tokens/"+strconv.FormatInt(tokenID, 10), nil)
+				req.Header.Set("Authorization", "Bearer "+operator.Token)
+				req.Header.Set("X-CSRF-Token", "test-csrf")
+				req.AddCookie(&http.Cookie{Name: "csrf_token", Value: "test-csrf"})
+				rr := httptest.NewRecorder()
+				router.ServeHTTP(rr, req)
+				if rr.Code != http.StatusNoContent {
+					t.Fatalf("revoke: %d %s", rr.Code, rr.Body)
+				}
+			case "disable":
+				_, err = db.Exec(`UPDATE users SET is_active=0 WHERE id=?`, owner.ID)
+			case "password":
+				_, err = db.Exec(`UPDATE users SET password_hash='changed' WHERE id=?`, owner.ID)
+			case "role":
+				_, err = db.Exec(`UPDATE users SET role='viewer' WHERE id=?`, owner.ID)
+			case "rotate":
+				var replacement string
+				replacement, err = tokens.CreateForServer(ctx, id, &owner.ID)
+				if err == nil && !svc.ValidateAgentToken(ctx, id, replacement) {
+					t.Fatal("rotation revoked replacement")
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if svc.ValidateAgentToken(ctx, id, raw) {
+				t.Fatal("revoked credential still valid")
+			}
+			request, err := http.NewRequest("GET", server.URL+"/agent/verify?server_id="+strconv.FormatInt(id, 10), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header = headers
+			verification, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verification.Body.Close()
+			if verification.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("revoked preflight: %d", verification.StatusCode)
+			}
+			reconnected, resp, err := websocket.DefaultDialer.Dial(endpoint, headers)
+			if reconnected != nil {
+				reconnected.Close()
+			}
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			if err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+				t.Fatal("revoked connection accepted")
+			}
+			conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+			_, _, err = conn.ReadMessage()
+			if err == nil {
+				t.Fatal("revoked connection still receiving")
+			}
+			if timeout, ok := err.(interface{ Timeout() bool }); ok && timeout.Timeout() {
+				t.Fatal("revoked connection was not closed")
+			}
+		})
 	}
 }

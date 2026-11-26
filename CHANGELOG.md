@@ -7,6 +7,42 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Keep text files, including PowerShell scripts, on LF across platforms to avoid
+  Git line-ending conversion warnings on Windows.
+
+## [0.1.4-beta] 2026-11-25
+
+- Invalidate agent transport credentials when their API token or owner authority
+  is revoked, and close connected agents after credential changes.
+- Export configuration tables and portable server mappings from one SQLite
+  snapshot so concurrent edits cannot produce inconsistent recovery archives.
+- Require the full CI suite before creating release drafts.
+
+- Include shared branding assets at their expected relative paths during Docker
+  frontend builds and allow an explicit Node heap limit on small build hosts.
+- Quote the Compose JWT-secret validation expression so its explanatory text
+  parses as valid YAML.
+- Fix Windows installer read/execute ACL encoding, verified with elevated native
+  filesystem permission tests.
+- Preserve the bootstrap Caddy admin listener address when applying configuration,
+  preventing Windows reload bind conflicts.
+- Add native Windows controller/agent service installation with separate virtual
+  accounts, protected DPAPI configuration, data-preserving reinstall/removal and
+  supervised Caddy shutdown.
+- Apply one reserved management-port rule to runtime startup and all native
+  installer configuration paths.
+- Retain native Linux amd64 releases alongside the added Linux arm64, Windows
+  amd64 and Docker targets.
+- Package Windows amd64 and Linux amd64/arm64 releases and add native service and
+  multiarch Docker/Compose qualification before publication.
+- Supervise both processes in Docker and persist Caddy storage in the data volume.
+- Document the Docker, native Windows service, and Linux amd64/arm64 install paths:
+  add a Docker getting-started guide and link the install methods from the
+  installation and Getting Started pages.
+
+- Expand browser acceptance coverage for encrypted backup/restore, real-agent
+  applied readiness, and non-localhost HTTPS session/CSRF behavior.
+
 - Apply explicit per-server Caddy trusted-proxy policies to visitor ACLs, rate
   limits and canonical upstream client headers, including location routes.
 - Bound proxy request headers, header-read time, idle keepalive and upstream TLS

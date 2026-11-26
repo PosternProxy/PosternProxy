@@ -21,10 +21,12 @@ import (
 
 	"github.com/posternproxy/posternproxy/internal/agentconfig"
 	"github.com/posternproxy/posternproxy/internal/caddybuild"
+	"github.com/posternproxy/posternproxy/internal/config"
 	"github.com/rs/zerolog/log"
 )
 
 type Options struct {
+	ConfigFile        string
 	AssetsDir         string
 	Release           string
 	Port              int
@@ -34,8 +36,8 @@ type Options struct {
 }
 
 func (o Options) Validate(version string) error {
-	if o.Port < 1 || o.Port > 65535 || o.Port == 80 || o.Port == 443 || o.Port == 2019 || o.Port == 8443 {
-		return fmt.Errorf("management port must be between 1 and 65535 and differ from 80, 443, 2019 (Caddy admin), and 8443 (TLS-passthrough bridge)")
+	if err := config.ValidateManagementPort(o.Port); err != nil {
+		return err
 	}
 	if o.Release != "" && !releaseTag.MatchString(o.Release) {
 		return fmt.Errorf("--release must be an exact release tag such as v0.2.0-beta")
@@ -72,6 +74,12 @@ func (i installation) serviceUser() string {
 func Run(ctx context.Context, opts Options, version string) error {
 	if err := opts.Validate(version); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		return installWindows(ctx, opts, nil, version)
+	}
+	if opts.ConfigFile != "" {
+		return fmt.Errorf("--config-file for controller service settings is supported on Windows only")
 	}
 	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		return fmt.Errorf("install supports Linux amd64 and arm64 only")
@@ -224,6 +232,9 @@ func (i *installation) readExistingConfig() error {
 				return fmt.Errorf("existing %s uses a custom storage layout; migrate it under /var/lib/posternproxy or retain your existing service setup before using install", key)
 			}
 		case "POSTERNPROXY_LISTEN":
+			if err := config.ValidateManagementAddress(value); err != nil {
+				return fmt.Errorf("existing configuration: %w", err)
+			}
 			host, port, err := net.SplitHostPort(value)
 			if err != nil {
 				return fmt.Errorf("invalid management address in existing configuration: %w", err)

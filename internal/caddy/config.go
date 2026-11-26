@@ -298,7 +298,7 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 	}
 
 	return &Config{
-		Admin: &AdminConfig{Listen: "localhost:2019"},
+		Admin: &AdminConfig{Listen: "127.0.0.1:2019"},
 		Apps:  apps,
 	}, nil
 }

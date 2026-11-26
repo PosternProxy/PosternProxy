@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"debug/elf"
+	"debug/pe"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/posternproxy/posternproxy/internal/caddybuild"
 )
 
 const releaseBaseURL = "https://github.com/PosternProxy/PosternProxy/releases/download/"
@@ -123,6 +126,25 @@ func verifyArchitecture(path, arch string) error {
 func VerifyArchitecture(path, arch string) error { return verifyArchitecture(path, arch) }
 
 func stageArtifacts(ctx context.Context, opts Options, version, arch, dest string) error {
+	return stagePlatformArtifacts(ctx, opts, version, "linux", arch, dest)
+}
+
+// StageLinuxAgentAssets supplies a controller on another OS with its release's
+// verified Linux agent/Caddy pair for native SSH provisioning.
+func StageLinuxAgentAssets(ctx context.Context, dest, version, arch string) error {
+	if !releaseTag.MatchString(version) || strings.HasSuffix(version, "-dirty") || developmentRevision.MatchString(version) {
+		return fmt.Errorf("development controllers require matching Linux provisioning assets supplied locally")
+	}
+	if arch != "amd64" && arch != "arm64" {
+		return fmt.Errorf("unsupported Linux agent architecture")
+	}
+	if err := stagePlatformArtifacts(ctx, Options{Release: version}, version, "linux", arch, dest); err != nil {
+		return err
+	}
+	return caddybuild.VerifyArtifact(filepath.Join(dest, "caddy"))
+}
+
+func stagePlatformArtifacts(ctx context.Context, opts Options, version, platform, arch, dest string) error {
 	client := &http.Client{
 		Timeout: 10 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -155,15 +177,19 @@ func stageArtifacts(ctx context.Context, opts Options, version, arch, dest strin
 		return closeErr
 	}
 	for _, binary := range []string{"caddy", "posternproxy-agent"} {
-		name := binary + "-linux-" + arch
+		suffix := ""
+		if platform == "windows" {
+			suffix = ".exe"
+		}
+		name := binary + "-" + platform + "-" + arch + suffix
 		if opts.AssetsDir != "" && checksums[name] == "" {
-			name = binary
+			name = binary + suffix
 		}
 		expected := checksums[name]
 		if expected == "" {
 			return fmt.Errorf("missing checksum for %s", name)
 		}
-		path := filepath.Join(dest, binary)
+		path := filepath.Join(dest, binary+suffix)
 		if opts.AssetsDir != "" {
 			src, err := os.Open(filepath.Join(opts.AssetsDir, name))
 			if err != nil {
@@ -183,12 +209,33 @@ func stageArtifacts(ctx context.Context, opts Options, version, arch, dest strin
 		if err := verifyChecksum(path, expected); err != nil {
 			return err
 		}
-		if err := verifyArchitecture(path, arch); err != nil {
+		if err := verifyPlatformArchitecture(path, platform, arch); err != nil {
 			return err
 		}
 		if err := os.Chmod(path, 0700); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func verifyPlatformArchitecture(path, platform, arch string) error {
+	if platform == "linux" {
+		return verifyArchitecture(path, arch)
+	}
+	if platform != "windows" || arch != "amd64" {
+		return fmt.Errorf("unsupported installation platform")
+	}
+	f, err := pe.Open(path)
+	if err != nil {
+		return fmt.Errorf("asset is not a Windows PE executable: %w", err)
+	}
+	defer f.Close()
+	if f.FileHeader.Machine != pe.IMAGE_FILE_MACHINE_AMD64 || f.FileHeader.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || f.FileHeader.Characteristics&pe.IMAGE_FILE_DLL != 0 {
+		return fmt.Errorf("asset is not a Windows amd64 executable")
+	}
+	if _, ok := f.OptionalHeader.(*pe.OptionalHeader64); !ok {
+		return fmt.Errorf("asset is not a 64-bit Windows executable")
 	}
 	return nil
 }

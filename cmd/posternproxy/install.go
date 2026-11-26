@@ -16,6 +16,7 @@ import (
 func parseInstallOptions(args []string, output io.Writer) (installer.Options, error) {
 	var opts installer.Options
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs.StringVar(&opts.ConfigFile, "config-file", "", "Windows service settings JSON file (optional; configuration is encrypted on installation)")
 	fs.SetOutput(output)
 	fs.StringVar(&opts.AssetsDir, "assets-dir", "", "local Caddy/agent assets and checksums.txt (no release downloads)")
 	fs.StringVar(&opts.Release, "release", "", "exact release tag for downloads (default: this controller's version)")

@@ -82,7 +82,7 @@ before starting the agent Compose service.
 ### Deploy from release binaries
 
 ```bash
-# For the supplied Linux amd64 bundle (use arm64 for an ARM bundle):
+# For Linux amd64 (use the arm64 archive on ARM servers):
 tar -xzf posternproxy-linux-amd64.tar.gz
 chmod +x posternproxy
 sudo ./posternproxy install --assets-dir .
@@ -92,6 +92,10 @@ The archive contains `posternproxy`, `posternproxy-agent`, `caddy`, and
 `checksums.txt`. The extracted controller is named `posternproxy`, without a
 platform suffix. `--assets-dir .` uses the bundled Caddy and agent rather than
 downloading release assets, so it also works with unreleased builds.
+
+Windows amd64 uses a zip bundle and native service installation. See the
+[Windows service guide](docs/content/getting-started/windows.md). Release targets
+are native Linux amd64 and arm64, Windows amd64, and Docker amd64/arm64.
 
 The installer verifies checksums, architecture, and Caddy plugins, then installs
 hardened systemd services, fail2ban, and unattended security updates. No scripts or

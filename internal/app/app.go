@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -61,6 +62,9 @@ type App struct {
 // returned rather than fatal-ed so main.go is the only place that calls
 // log.Fatal.
 func New(ctx context.Context, cfg *config.Config) (*App, error) {
+	if err := config.ValidateManagementAddress(cfg.ListenAddr); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	ready := false
 	defer func() {
@@ -155,6 +159,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	backupSvc.ConfigureCertificates(certstore.Store{Root: cfg.CertDir, Key: cfg.EncryptionKey})
 	serverSvc = services.NewServerService(db, auditSvc, hub, tokenSvc, caddyClient, cfg.EncryptionKey, cfg.ControllerURL, cfg.AgentBinPath)
 	serverSvc.ConfigureArtifacts(cfg.CaddyBinPath, cfg.Version)
+	serverSvc.ConfigureArtifactCache(filepath.Join(cfg.DataDir, "artifacts"))
 	nginxImportSvc := services.NewNginxImportService(proxyHostSvc, redirectionHostSvc)
 
 	registerRollbackHandlers(historySvc, proxyHostSvc)

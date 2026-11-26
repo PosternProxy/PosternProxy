@@ -428,7 +428,7 @@ func TestReconnectRebuildsDurableOfflineWorkAfterControllerRestart(t *testing.T)
 		}
 	})
 	current = NewCaddySyncService(db, nil, hub, "")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.ServeWS(2, w, r) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.ServeWS(2, w, r, nil) }))
 	defer server.Close()
 	previousID := ""
 	for range 2 {

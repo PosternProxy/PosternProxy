@@ -66,7 +66,7 @@ func TestLiveCustomTLSAndPortableRecovery(t *testing.T) {
 			t.Log(string(data))
 		}
 	})
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	ready := false
 	for range 100 {
 		response, err := client.Get("http://" + adminAddress + "/config/")

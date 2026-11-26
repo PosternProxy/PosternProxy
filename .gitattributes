@@ -2,14 +2,16 @@
 # out shell scripts with CRLF, which breaks them when run on Linux servers
 # (e.g. `set -euo pipefail\r` -> "invalid option name").
 
-# Default: let git normalize text files to LF in the repo.
-* text=auto
+# Keep text LF in both the repository and working tree on every platform.
+* text=auto eol=lf
 
 # Files that MUST stay LF regardless of platform (executed on Linux).
 *.sh    text eol=lf
 *.bash  text eol=lf
 
-# Windows-only scripts stay CRLF.
-*.ps1   text eol=crlf
+# PowerShell supports LF on Windows and Linux.
+*.ps1   text eol=lf
+
+# Windows command scripts stay CRLF.
 *.cmd   text eol=crlf
 *.bat   text eol=crlf

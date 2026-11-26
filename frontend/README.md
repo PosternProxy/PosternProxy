@@ -73,6 +73,16 @@ npm run format:check   # Optional Prettier check
 npm run type-check     # vue-tsc, no emit
 ```
 
+## Browser acceptance
+
+Run `npx playwright install chromium` once, then `npm run test:e2e`. The harness
+builds isolated controller/agent binaries and uses temporary databases. Ports
+18180, 18181, 18184 and 18185 must be free. No existing service is reused.
+The HTTPS project uses a disposable self-signed fixture with Chromium hostname
+mapping, so the system hosts file and trust store are unchanged. Tests cover
+encrypted recovery, applied agent readiness and HTTPS cookies/CSRF in addition
+to normal management workflows. `npm run type-check` also checks the test files.
+
 ## Recommended IDE setup
 
 VS Code + the official [Vue (Volar)](https://marketplace.visualstudio.com/items?itemName=Vue.volar)

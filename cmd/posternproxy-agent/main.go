@@ -6,20 +6,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/posternproxy/posternproxy/internal/agent"
+	"github.com/posternproxy/posternproxy/internal/agentconfig"
 	"github.com/posternproxy/posternproxy/internal/buildinfo"
 	"github.com/posternproxy/posternproxy/internal/certstore"
+	"github.com/posternproxy/posternproxy/internal/platformservice"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -38,31 +43,49 @@ func main() {
 		buildinfo.WriteVersion(os.Stdout, "posternproxy-agent", Version)
 		return
 	}
+	if handled, err := platformservice.Dispatch(os.Args[1:], "posternproxy-agent", runAgent); handled {
+		if err != nil {
+			log.Fatal().Err(err).Msg("Windows service operation failed")
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "install" {
 		runInstall(os.Args[2:])
 		return
 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := runAgent(ctx); err != nil {
+		log.Fatal().Err(err).Msg("agent stopped")
+	}
+}
 
-	controllerURL := mustEnv("POSTERNPROXY_CONTROLLER_URL") // wss://host:81
-	token := mustEnv("POSTERNPROXY_AGENT_TOKEN")
-	serverIDStr := mustEnv("POSTERNPROXY_SERVER_ID")
+func runAgent(ctx context.Context) error {
+	controllerURL := os.Getenv("POSTERNPROXY_CONTROLLER_URL")
+	token := os.Getenv("POSTERNPROXY_AGENT_TOKEN")
+	serverIDStr := os.Getenv("POSTERNPROXY_SERVER_ID")
 	caddyAPI := envOr("POSTERNPROXY_CADDY_API", "http://localhost:2019")
 
 	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
 	if err != nil {
-		log.Fatal().Err(err).Msg("invalid POSTERNPROXY_SERVER_ID")
+		return fmt.Errorf("invalid POSTERNPROXY_SERVER_ID")
+	}
+	if err := (agentconfig.Config{ControllerURL: controllerURL, Token: token, ServerID: serverID}).Validate(); err != nil {
+		return err
 	}
 
 	log.Info().Str("version", Version).Int64("server_id", serverID).Msg("starting posternproxy-agent")
 
 	a := &agentClient{
+		ctx:           ctx,
 		controllerURL: controllerURL,
 		token:         token,
 		serverID:      serverID,
 		caddyAPI:      caddyAPI,
 		startedAt:     time.Now(),
 	}
-	a.run()
+	a.run(ctx)
+	return nil
 }
 
 // caddyHTTPClient is used for all Caddy admin API calls. The timeout
@@ -70,6 +93,7 @@ func main() {
 var caddyHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type agentClient struct {
+	ctx           context.Context
 	controllerURL string
 	token         string
 	serverID      int64
@@ -78,11 +102,11 @@ type agentClient struct {
 }
 
 // run connects with exponential back-off and loops forever.
-func (a *agentClient) run() {
+func (a *agentClient) run(ctx context.Context) {
 	backoff := time.Second
-	for {
+	for ctx.Err() == nil {
 		connectedAt := time.Now()
-		if err := a.connect(); err != nil {
+		if err := a.connect(ctx); err != nil && ctx.Err() == nil {
 			log.Warn().Err(err).Dur("retry_in", backoff).Msg("agent disconnected")
 		}
 		// Reset backoff if the connection lasted long enough to be useful
@@ -90,7 +114,11 @@ func (a *agentClient) run() {
 		if time.Since(connectedAt) > 60*time.Second {
 			backoff = time.Second
 		}
-		time.Sleep(backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 		if backoff < 60*time.Second {
 			backoff *= 2
 		}
@@ -98,7 +126,7 @@ func (a *agentClient) run() {
 }
 
 // connect opens one WebSocket session and processes messages until the connection drops.
-func (a *agentClient) connect() error {
+func (a *agentClient) connect(ctx context.Context) error {
 	u, err := url.Parse(a.controllerURL)
 	if err != nil {
 		return fmt.Errorf("invalid controller URL")
@@ -123,11 +151,13 @@ func (a *agentClient) connect() error {
 
 	log.Info().Str("controller_host", u.Host).Msg("connecting to controller")
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Authorization": {"Bearer " + a.token}})
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), http.Header{"Authorization": {"Bearer " + a.token}})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopClosing()
 	conn.SetReadLimit(64 << 20)
 	log.Info().Msg("connected")
 
@@ -147,12 +177,18 @@ func (a *agentClient) connect() error {
 				errCh <- err
 				return
 			}
-			readCh <- msg
+			select {
+			case readCh <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return nil
 		case msg := <-readCh:
 			a.handleMessage(conn, msg)
 		case <-ticker.C:
@@ -233,6 +269,9 @@ func (a *agentClient) handleMessage(conn *websocket.Conn, msg agent.Message) {
 		Success:     success,
 		Error:       errMsg,
 	})
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return
+	}
 	if err := conn.WriteJSON(result); err != nil {
 		log.Warn().Err(err).Str("kind", msg.Kind).Msg("write command result")
 	}
@@ -247,6 +286,9 @@ func (a *agentClient) sendStatus(conn *websocket.Conn) {
 		CaddyVersion: version,
 		ActiveRoutes: routes,
 	})
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return
+	}
 	if err := conn.WriteJSON(msg); err != nil {
 		log.Warn().Err(err).Msg("write status")
 	}
@@ -254,7 +296,7 @@ func (a *agentClient) sendStatus(conn *websocket.Conn) {
 
 // queryCaddyVersion reads the Server response header from the Caddy admin API.
 func (a *agentClient) queryCaddyVersion() string {
-	resp, err := caddyHTTPClient.Get(a.caddyAPI + "/config/")
+	resp, err := a.caddyGet("/config/")
 	if err != nil {
 		return ""
 	}
@@ -268,7 +310,7 @@ func (a *agentClient) queryCaddyVersion() string {
 
 // queryCaddyRouteCount returns total HTTP routes across all Caddy servers.
 func (a *agentClient) queryCaddyRouteCount() int {
-	resp, err := caddyHTTPClient.Get(a.caddyAPI + "/config/apps/http/servers/")
+	resp, err := a.caddyGet("/config/apps/http/servers/")
 	if err != nil {
 		return 0
 	}
@@ -308,7 +350,7 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 	if body != nil {
 		r = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, a.caddyAPI+path, r)
+	req, err := http.NewRequestWithContext(a.requestContext(), method, a.caddyAPI+path, r)
 	if err != nil {
 		return err
 	}
@@ -327,15 +369,22 @@ func (a *agentClient) caddyRequest(method, path string, body json.RawMessage) er
 	return nil
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Fatal().Str("env", key).Msg("required environment variable not set")
+func (a *agentClient) requestContext() context.Context {
+	if a.ctx != nil {
+		return a.ctx
 	}
-	return v
+	return context.Background()
 }
+
+func (a *agentClient) caddyGet(path string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(a.requestContext(), http.MethodGet, a.caddyAPI+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return caddyHTTPClient.Do(request)
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

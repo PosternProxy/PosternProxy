@@ -30,10 +30,34 @@ is checked against native executable output, not just build metadata.
 
 ## Controller installation
 
-The tagged-release workflow builds Linux amd64/arm64 controller, agent, and Caddy
-assets, platform tar archives and a combined SHA-256 manifest, then creates a draft release for owner
-review. Local build scripts also emit a manifest. A draft must be published before
-the command can fetch its assets without authentication.
+The tagged-release workflow builds Windows amd64 and native Linux amd64/arm64
+controller, agent and Caddy bundles, loose installer assets and a combined SHA-256
+manifest. Windows uses a ZIP archive; Linux uses a tar archive. Draft creation
+depends on the complete quality CI suite (including browser, dependency and docs
+checks), Windows service qualification, native Linux amd64/arm64 installation and
+traffic checks, and Docker/Compose checks on amd64 and arm64. Local build scripts
+also emit a manifest. A draft must be published before the installer can fetch
+its assets without authentication. Each Linux architecture has loose controller,
+agent and Caddy assets plus a matching archive and checksum entries.
+
+The Windows runner executes `scripts/windows-service-smoke.ps1 -DisposableHost`
+after building. It checks service installation, retained credentials on reinstall,
+controller login, outbound agent enrollment and applied readiness, custom TLS,
+restart and removal with retained data. It requires an elevated disposable host
+and refuses existing installations. The Linux runner executes the native
+controller and agent qualification harnesses after installing the matching bundle.
+For an explicitly authorized workstation test, `-LocalMachine` is available
+instead of `-DisposableHost`; it still refuses existing installations and binds
+the test management listeners to loopback. Uninstall retains protected test data
+and binaries, and the harness does not change firewall rules.
+
+`docker-qualification.yml` builds and exercises both image roles through the real
+Compose templates on each native architecture. The smoke checks include login,
+outbound agent reconciliation, HTTP/custom TLS, agent restart, Caddy failure and
+controller replacement with retained volumes. `docker-release.yml` repeats these
+checks on the release tag before pushing versioned GHCR images; multiarchitecture
+version and channel tags follow only after both architectures pass. Publishing
+a prerelease selects the `beta` channel, while a stable release selects `latest`.
 
 `go test ./internal/installer ./cmd/posternproxy` covers artifact validation,
 option parsing, isolated host-file writes, preserved config, additive firewall
@@ -92,18 +116,30 @@ npx playwright install --with-deps chromium
 npm run test:e2e
 ```
 
-The harness compiles the controller, creates a disposable database/data directory,
-and starts it on `127.0.0.1:18181` with a Vite frontend on `127.0.0.1:18180`.
-Both ports must be unused. It does not reuse an existing controller. Fixed test
-credentials and test-only insecure-cookie mode apply only to this isolated HTTP
-fixture. Controller output, browser traces, videos, and screenshots are disabled
-to avoid persisting credentials. Generated test results are ignored by Git.
+The harness compiles the controller and agent and creates disposable data. The
+HTTP controller uses `127.0.0.1:18181` and Vite uses `127.0.0.1:18180`. A separate
+secure-cookie controller uses `127.0.0.1:18185`, behind a test TLS proxy on
+`127.0.0.1:18184`. All four ports must be unused. Chromium maps
+`cert-upload.e2e.test` and the cross-site `attacker.test` to loopback without
+editing the hosts file. The HTTPS project accepts the disposable self-signed
+fixture certificate; it checks cookie/browser behavior, not public CA trust.
+Controller output, browser traces, videos and screenshots are disabled. Test
+credentials and generated test results are confined to the disposable harness.
 
-The smoke scenarios check login, HttpOnly/Strict refresh-cookie properties,
-refresh after reload, logout, reload after logout, and visible configuration
-failure after a saved host cannot reach Caddy. They do not qualify secure
-cookies over HTTPS, non-localhost deployment, provisioning,
-custom cert upload, or backup restore. These remain release gates.
+The scenarios cover login/refresh/reload/logout, host create/edit/disable,
+certificate upload/rejection, manual enrollment, saved-but-failed configuration,
+parked HTTP/TLS diagnostics and branding. Encrypted export/restore is exercised
+through the UI, including wrong-passphrase refusal and a committed restore
+waiting for application. A real outbound agent with a controlled Caddy admin
+fixture proves online is distinct from applying/failed/applied, and retry reaches
+the acknowledged revision. It does not perform an SSH installation.
+
+The non-localhost HTTPS scenario checks Secure/HttpOnly/Strict cookie attributes,
+refresh and logout, missing/mismatched/correct CSRF tokens, and browser exclusion
+of cookies on a cross-site request. Recovery/readiness scenarios use distinct
+test client identities behind an explicitly trusted loopback proxy; the normal
+management API rate limit remains unchanged. OS/service installation and actual
+Caddy traffic are qualified separately by native/integration checks.
 
 ## Required checks
 
@@ -115,6 +151,59 @@ artifacts, upgrade sources, clean recovery, and representative multi-server
 observation still require evidence before a release decision.
 
 ## Current local evidence
+
+The November 25 Windows/runtime/release changes pass Windows Go tests, build and
+vet, Go vulnerability scanning, frontend type-check/build/lint, all 15 browser
+scenarios and the Hugo documentation build. Windows tests exercise encrypted
+configuration, retained-file trust, service cancellation and child-process
+cleanup. Workflow and qualification-script syntax checks pass.
+
+An additional authorized Windows workstation run used the version-stamped
+`v0.0.0-windows-local-test` controller/agent and pinned Caddy. It passed actual SCM
+controller installation/login/version, separate virtual service identities,
+bootstrap cleanup, stable encryption key and credentials on reinstall, restart,
+and uninstall retaining data. Native agent installation passed encrypted enrollment,
+authenticated outbound connectivity, acknowledged applied revision, verified custom
+TLS through Caddy, restart and uninstall. Final independent checks found no managed
+services/processes or listeners on the test ports. Binaries and protected data were
+retained. The run exposed and fixed SDDL read/execute encoding and a Caddy admin
+listener mismatch that prevented Windows reloads; elevated filesystem regressions
+also passed. Candidate CI, native arm64 and Docker execution still need their own
+successful runs; this does not qualify published release assets.
+
+A separate Ubuntu 24.04.5 amd64 VM passed current development-bundle installation,
+fresh login, private files, bootstrap cleanup, preserved configuration on rerun,
+native agent enrollment and actual SSH provisioning. Real custom TLS, certificate
+group permissions and unrelated-user denial, agent/Caddy restarts, stream and
+proxy-trust fixtures, portable TLS recovery and two-agent convergence passed.
+All compiled command/internal package test executables also passed natively.
+Original SSH authorized keys and firewall rules were unchanged by the native
+qualification, before Docker was subsequently installed for container testing.
+
+On that x86-64 VM, QEMU ARM64 controller/agent installation, login, reinstall,
+TLS, certificate permissions and restarts passed. ARM64 Caddy passed the pinned
+traffic, rate-limit, trust, streaming, UDP and passthrough fixtures. A native test
+driver exercising ARM64 Caddy/agents passed recovery and two-agent convergence.
+The emulator required a temporary controller service JIT exception; it was removed
+after testing and production unit hardening remains intact. These are functional
+emulation results, not native ARM hardware, performance or hardening qualification.
+
+ARM64 runtime images also passed the actual Compose smoke suite under QEMU:
+enrollment/applied readiness, HTTP/custom TLS, agent restart, Caddy-failure
+supervision, controller replacement and retained volumes. These images used the
+production Dockerfiles with explicit build contexts supplying the verified
+cross-built ARM64 binaries. They establish runtime/package compatibility; native
+ARM source-image builds remain a candidate CI check.
+
+The amd64 production Dockerfiles subsequently built both images from source and
+passed the same complete Compose suite. Live qualification fixed missing shared
+branding paths in the frontend stage and invalid quoting in the Compose secret
+validation expression. The smoke harness refreshes ephemeral published ports
+after restart, matching observed Docker behavior. The small build VM needed an
+explicit frontend build heap limit and temporary swap for compilation. All test
+containers and the source builder were stopped afterwards; native services were
+disabled, temporary swap removed and the emulator service exception absent.
+Docker/QEMU, installed test data and the native test images remain on the VM.
 
 The November 2026 fixes add live custom-certificate HTTPS traffic and encrypted
 recovery onto a fresh database with a different controller key. Tests also verify

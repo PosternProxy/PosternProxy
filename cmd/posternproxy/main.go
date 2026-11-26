@@ -26,6 +26,7 @@ import (
 	"github.com/posternproxy/posternproxy/internal/app"
 	"github.com/posternproxy/posternproxy/internal/buildinfo"
 	"github.com/posternproxy/posternproxy/internal/config"
+	"github.com/posternproxy/posternproxy/internal/platformservice"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -47,6 +48,12 @@ func main() {
 		buildinfo.WriteVersion(os.Stdout, "posternproxy", Version)
 		return
 	}
+	if handled, err := platformservice.Dispatch(os.Args[1:], "posternproxy", runController); handled {
+		if err != nil {
+			log.Fatal().Err(err).Msg("Windows service operation failed")
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "install" {
 		runInstall(os.Args[2:])
 		return
@@ -57,21 +64,25 @@ func main() {
 		return
 	}
 
-	cfg := config.Load()
-	cfg.Version = Version
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if err := runController(ctx); err != nil {
+		log.Fatal().Err(err).Msg("controller stopped")
+	}
+}
 
+func runController(ctx context.Context) error {
+	cfg := config.Load()
+	cfg.Version = Version
 	a, err := app.New(ctx, cfg)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to build application")
+		return err
 	}
 	defer func() { _ = a.Close() }()
 
 	pw, err := a.EnsureAdminUser(ctx)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to ensure admin user")
+		return err
 	}
 	if pw != "" {
 		email := os.Getenv("POSTERNPROXY_ADMIN_EMAIL")
@@ -100,7 +111,7 @@ func main() {
 
 	select {
 	case err := <-listenErr:
-		log.Fatal().Err(err).Msg("server error")
+		return err
 	case <-ctx.Done():
 	}
 	log.Info().Msg("shutting down")
@@ -109,6 +120,7 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("shutdown error")
+		return err
 	}
+	return nil
 }

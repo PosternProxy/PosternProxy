@@ -143,7 +143,7 @@ func TestPinnedCaddyTraffic(t *testing.T) {
 	client := &http.Client{Timeout: time.Second}
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(httpPort)
 	ready := false
-	for range 100 {
+	for ctx.Err() == nil {
 		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(httpPort), 100*time.Millisecond)
 		if err == nil {
 			conn.Close()

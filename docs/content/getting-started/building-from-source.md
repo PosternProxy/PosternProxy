@@ -1,6 +1,6 @@
 ---
 title: Building from Source
-weight: 3
+weight: 5
 ---
 
 # Building from Source
@@ -53,13 +53,13 @@ Binaries are written to the **`bin\` directory**: `bin\posternproxy`,
 because the target is Linux).
 The directory also contains `checksums.txt`.
 
-{{< hint info >}}
+{{% hint info %}}
 **Native Windows binaries**
 The scripts target Linux by default because PosternProxy runs on Linux (the
 installer is Debian/Ubuntu-only). You can produce native Windows binaries for
 local testing with `.\scripts\build.ps1 -GoOS windows`, but there is no supported
 Windows install path.
-{{< /hint >}}
+{{% /hint %}}
 
 ## What the build does
 
@@ -104,7 +104,8 @@ See [Installation]({{< relref "/getting-started/installation" >}}) for firewall,
 offline-package, and rerun options. The source-build path uses local assets so
 unreleased code does not silently download dependencies from another release.
 
-Tagged release builds use `.github/workflows/release.yml` to build Linux amd64
-and arm64 assets and a combined `checksums.txt`. The workflow creates a draft
-release for owner review; the owner must publish it before automatic installation
-can download those assets.
+Tagged release builds use `.github/workflows/release.yml` to build the Windows
+amd64, native Linux amd64/arm64, and Docker amd64/arm64 assets with a combined
+`checksums.txt`. Both native Linux architectures receive controller, agent and
+Caddy bundles. The workflow creates a draft release for owner review;
+the owner must publish it before automatic installation can download those assets.
