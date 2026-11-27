@@ -61,6 +61,7 @@ This ensures error pages are scoped per proxy host — a 502 page on `app.exampl
 
 ## Notes
 
+- [NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough) rejects a custom 401 page, including one supplied through the API, a backup, or a history snapshot. This tab edits 502 and 503 pages.
 - Error pages are served with the original error status code (Caddy does not change it to 200).
 - The `Content-Type` header is set to `text/html; charset=utf-8`.
 - Error pages can include inline CSS and JavaScript. External resources (fonts, scripts) will load only if the client has network access to them, which may not be true if the error is caused by a network partition.

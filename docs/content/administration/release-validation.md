@@ -12,12 +12,15 @@ certificate, and recovery blockers.
 
 ## Caddy build contract
 
-`internal/caddybuild/build.sh` is the source of the Caddy, L4, rate-limit, and
-xcaddy versions. Bash and PowerShell builds, Dockerfiles, standalone installers,
-and native SSH provisioning consume it. Installers check the core version and
-both plugin versions. Native installers also verify the pinned Go toolchain and
-security dependency replacements from the contract. The controller installer stages and verifies its release's
-Caddy, then replaces the installed binary. The native agent installer stages and verifies Caddy before replacing it.
+`internal/caddybuild/build.sh` is the source of the Caddy, L4, rate-limit,
+`http_ntlm`, and xcaddy versions. Bash and PowerShell builds, Dockerfiles,
+standalone installers, and native SSH provisioning consume it. Installers check
+the core version and the pinned plugin versions, including
+`github.com/PosternProxy/ntlm-transport`. Native installers also verify the
+pinned Go toolchain and security dependency replacements from the contract. The
+controller installer stages and verifies its release's Caddy, then replaces the
+installed binary. The native agent installer stages and verifies Caddy before
+replacing it.
 
 `posternproxy install` and `posternproxy-agent install` embed the contract; neither
 needs a helper file. Both shell entry points delegate to these Go subcommands.
@@ -80,7 +83,8 @@ POSTERNPROXY_TEST_CADDY=/tmp/posternproxy-test-caddy \
 The acceptance fixtures build configuration using the production
 translator, launches an isolated native Caddy on temporary ports, and checks HTTP
 proxy traffic, a rate-limit rejection, and TCP forwarding. It checks the binary's
-embedded dependency versions. Missing or incompatible binaries fail the test.
+embedded dependency versions, including the pinned `http_ntlm` module. Those
+traffic checks do not exercise NTLM passthrough. Missing or incompatible binaries fail the test.
 The additional service acceptance fixture runs two real outbound agents against
 two native Caddy processes, proves host and ACL traffic changes, saves an offline
 edit, reopens the controller database on restart, and verifies convergence and

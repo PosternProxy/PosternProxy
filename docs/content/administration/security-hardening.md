@@ -86,6 +86,12 @@ must leave the last reviewed list in place; never fall back to trusting everyone
 Use the [Caddy trust model](https://caddyserver.com/docs/caddyfile/options#trusted_proxies)
 when configuring intermediate proxies. This controls identity, not origin access.
 
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+does not use these forwarded headers as the connection identity. It follows the
+immediate client connection. An intermediary that shares one connection across
+users can break per-user isolation. Leave the control off behind that kind of
+proxy. The control is legacy, and IIS behavior is not verified.
+
 ### HTTP resource safeguards
 
 Generated Caddy listeners allow at most 1 MiB of request headers, allow 10 seconds

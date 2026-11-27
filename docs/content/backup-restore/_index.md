@@ -63,6 +63,11 @@ server mappings fail before destination configuration is replaced. All SQL
 changes are transactional; staged certificate sources are immutable, so a failed
 replacement cannot overwrite the previously active pair.
 
+A proxy host row may include `ntlm_enabled`. A row that omits it restores with
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+off. A row that turns it on together with a rejected combination fails before
+destination data is replaced.
+
 ## Legacy partial JSON compatibility
 
 `GET /api/backup/export` still returns the version 1 unencrypted database export;

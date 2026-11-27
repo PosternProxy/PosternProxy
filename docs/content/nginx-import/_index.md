@@ -30,8 +30,10 @@ uploaded separately; Nginx filesystem paths are not transferred.
 
 Locations, upstream groups, variables, cache directives, scripting, and complex
 nesting require manual review. Parsed location information is not copied into
-created proxy hosts by the current import service. Parser warnings do not prove
-DNS resolution, upstream reachability, or successful Caddy application.
+created proxy hosts by the current import service. Imported proxy hosts leave
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+off. Parser warnings do not prove DNS resolution, upstream reachability, or
+successful Caddy application.
 
 ## After import
 

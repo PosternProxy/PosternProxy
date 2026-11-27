@@ -15,6 +15,9 @@ The first upstream is always the **Primary** backend (set on the **Details** tab
 - **Port** — the port the backend listens on
 
 There is no enforced limit on the number of backends.
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+allows only the primary upstream. Extra backends are rejected, and there is no
+NTLM load balancing or failover. Turn the control off before adding backends.
 
 <!-- TODO: Screenshot — Upstreams tab with three backends and lb-policy radio cards -->
 

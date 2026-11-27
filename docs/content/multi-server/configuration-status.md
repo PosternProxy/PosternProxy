@@ -45,6 +45,18 @@ new user edit. Transient failures can extend convergence time. Configuration
 application is serialized per server; the latest desired state is coalesced
 while an earlier revision is in flight.
 
+One NTLM host that the route builder rejects blocks the new configuration for
+every host on that server. Status then keeps the generic application failure,
+the desired row stays saved, and the previous Caddy configuration keeps serving.
+PosternProxy does not fall back to ordinary HTTP. Correct or disable the host,
+then retry sync. See
+[NTLM passthrough and Caddy]({{< relref "/administration/upgrading" >}}#ntlm-passthrough-and-caddy).
+
+When Caddy reports `unknown module: http.reverse_proxy.transport.http_ntlm`,
+status stores `Caddy rejected the configuration because the NTLM transport module is missing. Upgrade Caddy on this server and retry sync.`
+Other Caddy rejections keep the generic sentence. The create or update HTTP 502
+body does not include that module sentence.
+
 ## API behavior
 
 - `GET /api/configuration` returns per-server desired/applied revisions, status,

@@ -109,7 +109,10 @@ rm -f "$COOKIE_JAR"
 Use HTTPS for remote management with secure cookies enabled. Read
 [Configuration application status]({{< relref "/multi-server/configuration-status" >}})
 after saving: a resource can be saved while its Caddy application fails or waits
-for an offline agent. This table is a route overview, not a complete schema/API
+for an offline agent. `ntlm_enabled` is optional and defaults to false, so a
+create or full update that omits it leaves
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+off. This table is a route overview, not a complete schema/API
 specification; see `internal/models/` and handlers for currently accepted fields.
 
 ## Notes

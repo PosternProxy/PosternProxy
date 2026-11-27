@@ -76,11 +76,21 @@ HTTP Strict Transport Security instructs browsers to only connect via HTTPS for 
 Once a browser receives an HSTS header, it will refuse HTTP connections for the `max-age` period (1 year by default). Do not enable HSTS unless you are certain HTTPS will remain available for the domain.
 {{< /hint >}}
 
+## TLS termination and NTLM
+
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+terminates TLS when the host is served over HTTPS. That can conflict with IIS
+Extended Protection. Do not turn off Extended Protection or certificate
+verification to make the upstream connect. When the upstream must see the client
+handshake, use [TLS passthrough]({{< relref "/proxy-hosts/tls-passthrough" >}}) and
+leave the NTLM control off. IIS behavior of the NTLM control is not verified.
+
 ## HTTP/2
 
 HTTP/2 is enabled by default. It is a **server-wide** setting (the HTTPS listener
 serves all hosts), not a per-host option — toggle it per server on the **Servers**
-page. Turning it off restricts that server's HTTPS listener to HTTP/1.1.
+page. Turning it off restricts that server's HTTPS listener to HTTP/1.1. The
+NTLM transport still uses HTTP/1.1 on its upstream connection.
 
 ## TLS Passthrough
 

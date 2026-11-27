@@ -67,6 +67,13 @@ Caddy supports [placeholder variables](https://caddyserver.com/docs/conventions#
 
 ## Notes
 
+- With [NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough)
+  on, a rule is rejected when it can change the request `Authorization` header
+  or the response `WWW-Authenticate` header. That includes a delete of `*` and
+  other wildcard deletes that match those names, and any header name containing
+  `{`, `}`, `:`, or a line break. Other rules, including the presets on this
+  page, can still be saved. The Security tab warns against header rules on
+  these hosts because they can break Integrated Windows Authentication.
 - Rules are grouped into Caddy set/add/delete operations. Avoid contradictory
   operations on the same name; row order is not a general ordering guarantee.
 - Response header rules are applied after the upstream responds. They cannot prevent upstream from sending a header; they can only modify the copy that reaches the client.

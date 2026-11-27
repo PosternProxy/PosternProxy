@@ -46,12 +46,19 @@ Each snapshot captures the full proxy host record, including:
 - Rate limit settings
 - Health check settings
 - TLS passthrough flag
+- NTLM authentication passthrough flag
 - Custom error pages
 - Custom headers
 - Custom locations
 - Advanced config
 
 Rollback leaves the host's current enabled or disabled state in place.
+
+Snapshots saved before the NTLM column existed omit the flag. Rolling one of
+those back turns passthrough off. A snapshot that enables it together with a
+rejected combination is refused. The current host and its desired revision stay
+as they were. See
+[NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough).
 
 ## Retention
 

@@ -55,6 +55,7 @@ as a successful reachability probe.
 
 ## Notes
 
+- Health checks stay available when [NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough) is on. A check that expects HTTP 200 marks the only upstream unhealthy when the probe receives 401. Point the path at an anonymous URL or leave active checks off.
 - The dashboard counters are keyed by upstream address, not by host or remote
   server. Do not treat the widget as isolated per-host or remote health evidence.
 - Active and passive checks can be enabled simultaneously — passive checks provide faster failure detection while active checks provide recovery detection.

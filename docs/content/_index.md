@@ -18,6 +18,7 @@ Start with [Installation]({{< relref "/getting-started/installation" >}}) and re
 | Capability | Current scope |
 |---|---|
 | HTTP proxying | Domains, upstreams, load-balancing policies, active/passive checks |
+| NTLM passthrough | Legacy and off unless enabled. One upstream. IIS behavior is not verified. |
 | HTTPS | Caddy-managed certificates and custom uploads; certificate access/validation limits remain |
 | Traffic Forwarding | Caddy L4 TCP/UDP forwarding and SNI passthrough |
 | Access control | Proxy-host IP rules and per-host rate limits |

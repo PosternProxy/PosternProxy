@@ -44,6 +44,10 @@ headers and streaming compatibility have live acceptance coverage. An actual
 Cloudflare Tunnel or authenticated-origin deployment has not been qualified;
 the beta does not claim a validated Cloudflare-origin setup.
 
+NTLM authentication passthrough is implemented and stays off unless an
+administrator enables it. The traffic checks above do not exercise it, and IIS
+behavior is not verified.
+
 Docker SSH provisioning requires a published version-matched image and existing
 Docker; it remains hidden in the UI. Failed replacements retain the previous
 container for operator rollback. Published container/release installation is a

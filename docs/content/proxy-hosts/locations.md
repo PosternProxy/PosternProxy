@@ -52,6 +52,7 @@ route JSON and verify its resulting configuration.
 
 ## Notes
 
+- [NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough) rejects every path location on that host. Leave this tab empty while the control is on.
 - Locations are stored as a JSON array in the database alongside the proxy host record.
 - Changing locations saves desired configuration and requests application; no
   service restart is normally required. Verify the configuration notice.

@@ -18,7 +18,7 @@ the Go toolchain off production. The build produces three **Linux** binaries:
 |---|---|
 | `posternproxy` | The controller (management UI + API, with the frontend embedded) |
 | `posternproxy-agent` | The remote agent |
-| `caddy` | A custom Caddy build with the L4 and rate-limit plugins |
+| `caddy` | A custom Caddy build with the L4, rate-limit, and legacy `http_ntlm` plugins |
 
 **Requirements:** Go 1.26+ and Node.js 20.19+ or 22.12+ (with npm).
 

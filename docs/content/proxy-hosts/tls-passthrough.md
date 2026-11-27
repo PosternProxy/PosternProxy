@@ -15,6 +15,7 @@ Use TLS Passthrough when:
 - The upstream is a **database** or other service presenting its own TLS certificate
 - You need **end-to-end encryption** between client and upstream with no proxy in the middle
 - The upstream uses a **private CA** certificate that Caddy cannot validate
+- The upstream must see the original client handshake, such as some IIS Extended Protection setups. Leave [NTLM authentication passthrough]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough) off. That control is legacy, and its IIS behavior is not verified.
 
 ## How to enable
 
@@ -28,6 +29,8 @@ On the **Details** tab, toggle **TLS Passthrough** on. When enabled:
 <!-- TODO: Screenshot — Details tab with TLS Passthrough toggle enabled -->
 
 ## Limitations
+
+NTLM authentication passthrough cannot be combined with TLS passthrough. Saving a host with both enabled is rejected.
 
 Because TLS Passthrough bypasses Caddy's HTTP layer, the following features are **not available** when passthrough is enabled:
 

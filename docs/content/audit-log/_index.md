@@ -13,6 +13,7 @@ Implemented audit calls cover host creation, edits, deletion and enable/disable;
 access-list and custom-certificate mutations; user changes and password resets;
 server changes and sync requests; successful/failed login; and join-token issue
 and revocation. Host changes include a safe subset of before/after fields.
+That subset includes `ntlm_enabled`.
 
 Settings update outcomes, backup export/restore, API-token creation/revocation,
 logout, provisioning outcomes and enrollment rotation also create attributed,

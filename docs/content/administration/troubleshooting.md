@@ -125,6 +125,40 @@ admin authority, write scope and CSRF cookie/header validation. See the
 and [application status]({{< relref "/multi-server/configuration-status" >}}).
 There is no `/api/settings/caddy-sync` endpoint.
 
+## NTLM passthrough
+
+The Security tab control is legacy and off unless you enable it. IIS behavior
+is not verified. Limits are in
+[Proxy Hosts]({{< relref "/proxy-hosts" >}}#ntlm-authentication-passthrough).
+
+### The save is rejected
+
+Creating or updating a host, restoring a history snapshot, or restoring a backup
+rejects NTLM passthrough when the host also has extra upstreams, path locations,
+TLS passthrough, nonempty advanced route JSON, a header rule that can change
+`Authorization` or `WWW-Authenticate`, or a custom 401 page. That rejection does
+not change the current host. A history or backup rejection does not move the
+desired revision.
+
+### The host saved, but Caddy did not apply it
+
+A create or update can save the host and still fail application. The response
+says the configuration was saved and names the server. It does not include
+Caddy's reason. Read
+[configuration status]({{< relref "/multi-server/configuration-status" >}}).
+
+If the status error is `Caddy rejected the configuration because the NTLM transport module is missing. Upgrade Caddy on this server and retry sync.`,
+replace Caddy on that server with the pinned build, then retry sync. The last
+loaded configuration keeps serving. PosternProxy does not fall back to ordinary
+HTTP.
+
+If one saved NTLM host cannot be rendered, application fails for every host on
+that server. Status then keeps the generic failure:
+`Configuration application failed; retry or check server connectivity.` on the
+controller, or `Agent rejected configuration. Check the server and retry synchronization.`
+on an agent. Correct or disable that host, then retry sync. The previous Caddy
+configuration keeps serving.
+
 ## Multi-server issues
 
 ### Agent shows as Offline
