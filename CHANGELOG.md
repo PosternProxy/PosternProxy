@@ -7,6 +7,10 @@ and this project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Add a legacy, opt-in NTLM authentication passthrough setting on proxy hosts. It is off unless an administrator enables it, keeps a single upstream and a direct browser connection, and does not change TLS verification. IIS behavior is not verified. A Caddy build without the pinned transport fails sync and leaves the last applied configuration in place.
+
+- Pin the Apache-2.0 `github.com/PosternProxy/ntlm-transport` fork in the standard Caddy build so `http.reverse_proxy.transport.http_ntlm` is present. The fork fixes the upstream lock leak, drops transports left behind by failed authenticated requests, and limits each downstream connection to one upstream socket. The pinned revision is `v0.0.0-20261127162849-66b6501bd51c`.
+
 - Initialize the browser test CSRF cookie through an authenticated safe request
   instead of racing dashboard requests after login.
 

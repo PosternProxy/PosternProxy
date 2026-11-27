@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,6 +84,39 @@ func (s *CaddySyncService) States(ctx context.Context) ([]ConfigState, error) {
 	return states, rows.Err()
 }
 
+const (
+	localApplyFailure = "Configuration application failed; retry or check server connectivity."
+	agentApplyFailure = "Agent rejected configuration. Check the server and retry synchronization."
+	ntlmModuleMissing = "Caddy rejected the configuration because the NTLM transport module is missing. Upgrade Caddy on this server and retry sync."
+	ntlmUnknownModule = "unknown module: http.reverse_proxy.transport.http_ntlm"
+)
+
+func applyFailureSentence(raw, generic string) string {
+	start := strings.Index(raw, "{")
+	if start < 0 {
+		return generic
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw[start:]), &body); err != nil || body.Error == "" {
+		return generic
+	}
+	if strings.Contains(body.Error, ntlmUnknownModule) {
+		return ntlmModuleMissing
+	}
+	return generic
+}
+
+func (s *CaddySyncService) noteApplyFailure(ctx context.Context, serverID, revision int64, raw, generic string) error {
+	sentence := applyFailureSentence(raw, generic)
+	log.Warn().Int64("server_id", serverID).Int64("revision", revision).Str("apply_error", sentence).Msg("configuration was not applied")
+	if err := s.mark(ctx, serverID, revision, "failed", sentence); err != nil {
+		return fmt.Errorf("record application failure: %w", err)
+	}
+	return nil
+}
+
 func (s *CaddySyncService) mark(ctx context.Context, id, revision int64, status, message string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE server_config_state SET status=?,error=?,updated_at=datetime('now') WHERE server_id=? AND desired_revision=?`, status, message, id, revision)
 	if err != nil {
@@ -130,7 +165,7 @@ func (s *CaddySyncService) commandResult(id int64, result agent.CommandResultPay
 	if result.Success {
 		err = s.applied(ctx, id, attempt.Revision)
 	} else {
-		err = s.mark(ctx, id, attempt.Revision, "failed", "Agent rejected configuration. Check the server and retry synchronization.")
+		err = s.noteApplyFailure(ctx, id, attempt.Revision, result.Error, agentApplyFailure)
 	}
 	if err != nil {
 		log.Error().Err(err).Int64("server_id", id).Msg("failed to record agent application result")

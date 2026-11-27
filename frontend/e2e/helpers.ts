@@ -30,7 +30,13 @@ export async function apiHeaders(context: BrowserContext): Promise<Record<string
   return { Authorization: authorization, 'X-CSRF-Token': csrf!.value }
 }
 
-type ProxyHost = { id: number; domain_names: string[]; enabled: boolean; forward_port: number }
+type ProxyHost = {
+  id: number
+  domain_names: string[]
+  enabled: boolean
+  forward_port: number
+  ntlm_enabled: boolean
+}
 
 // Fetches the current proxy host for a domain, or undefined if absent. Used to
 // assert that UI-driven mutations actually persisted server-side.

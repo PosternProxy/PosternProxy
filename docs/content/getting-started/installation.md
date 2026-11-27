@@ -242,9 +242,10 @@ systemctl restart posternproxy
 
 ## Caddy plugins included
 
-The installer downloads a pinned Caddy build with two plugins beyond the standard distribution:
+The installer downloads a pinned Caddy build with these plugins beyond the standard distribution:
 
 | Plugin | Purpose |
 |---|---|
 | `github.com/mholt/caddy-l4` | Layer 4 routing (stream hosts, TLS passthrough) |
 | `github.com/mholt/caddy-ratelimit` | Per-host request rate limiting |
+| `github.com/PosternProxy/ntlm-transport` | Legacy NTLM passthrough transport (`http.reverse_proxy.transport.http_ntlm`). Apache-2.0 fork of `github.com/caddyserver/ntlm-transport`. The proxy-host control can select it. IIS behavior is not verified. |

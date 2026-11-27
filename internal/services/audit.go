@@ -50,7 +50,7 @@ func hostAuditSnapshot(entity any) (map[string]json.RawMessage, error) {
 	}
 	safe := map[string]json.RawMessage{}
 	// Route bodies, headers, and upstream configuration can carry credentials.
-	for _, key := range []string{"id", "server_id", "domain_names", "enabled", "certificate_id", "access_list_id", "incoming_port", "forward_port", "protocol", "status_code", "http_only", "ssl_forced"} {
+	for _, key := range []string{"id", "server_id", "domain_names", "enabled", "certificate_id", "access_list_id", "incoming_port", "forward_port", "protocol", "status_code", "http_only", "ssl_forced", "ntlm_enabled"} {
 		if value, ok := fields[key]; ok {
 			safe[key] = value
 		}

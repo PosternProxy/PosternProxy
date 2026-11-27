@@ -13,8 +13,8 @@ publishes a qualified GitHub release:
 | `ghcr.io/posternproxy/posternproxy` | Controller with the built-in Caddy build and embedded UI |
 | `ghcr.io/posternproxy/posternproxy-agent` | Remote agent for multi-server setups |
 
-Both images bundle the pinned Caddy build with the `caddy-l4` and
-`caddy-ratelimit` plugins, so no separate Caddy install is required. The manifests
+Both images bundle the pinned Caddy build with the `caddy-l4`,
+`caddy-ratelimit`, and `http_ntlm` plugins, so no separate Caddy install is required. `http_ntlm` is a legacy transport. IIS behavior is not verified. The manifests
 are multi-architecture; Docker pulls the variant matching your host.
 
 Use `:beta` for a published prerelease, `:latest` for a stable release, or pin an

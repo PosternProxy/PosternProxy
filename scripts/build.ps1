@@ -31,10 +31,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot   = (Resolve-Path "$PSScriptRoot\..").Path
 $CaddyContract = Get-Content (Join-Path $ProjectRoot 'internal/caddybuild/build.sh') -Raw
 $CaddyPins = @{}
-foreach ($PinMatch in [regex]::Matches($CaddyContract, '(?m)^(CADDY_VERSION|CADDY_L4_VERSION|CADDY_RATELIMIT_VERSION|XCADDY_VERSION|CADDY_GO_TOOLCHAIN|CADDY_SECURITY_REPLACEMENTS)=([^\r\n]+)')) {
+foreach ($PinMatch in [regex]::Matches($CaddyContract, '(?m)^(CADDY_VERSION|CADDY_L4_VERSION|CADDY_RATELIMIT_VERSION|CADDY_NTLM_VERSION|XCADDY_VERSION|CADDY_GO_TOOLCHAIN|CADDY_SECURITY_REPLACEMENTS)=([^\r\n]+)')) {
     $CaddyPins[$PinMatch.Groups[1].Value] = $PinMatch.Groups[2].Value
 }
-if ($CaddyPins.Count -ne 6) { throw 'Invalid Caddy build contract' }
+if ($CaddyPins.Count -ne 7) { throw 'Invalid Caddy build contract' }
 $binPath       = Join-Path "$ProjectRoot" "bin"
 $FrontendDir   = Join-Path $ProjectRoot "frontend"
 $UIEmbedDir    = Join-Path $ProjectRoot "internal\ui\dist"
@@ -174,6 +174,7 @@ $CaddySecurityArgs = @(foreach ($Replacement in ($CaddyPins.CADDY_SECURITY_REPLA
 & $XcaddyCmd build $CaddyPins.CADDY_VERSION `
     --with "github.com/mholt/caddy-l4@$($CaddyPins.CADDY_L4_VERSION)" `
     --with "github.com/mholt/caddy-ratelimit@$($CaddyPins.CADDY_RATELIMIT_VERSION)" `
+    --with "github.com/PosternProxy/ntlm-transport@$($CaddyPins.CADDY_NTLM_VERSION)" `
     --output $CaddyBin @CaddySecurityArgs
 $CaddyBuildFailed = $LASTEXITCODE -ne 0
 $env:GOTOOLCHAIN = $PreviousGoToolchain

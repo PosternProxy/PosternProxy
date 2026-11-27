@@ -38,6 +38,8 @@ export interface CreateProxyHostInput {
   tls_passthrough?: boolean
   // HTTP-only: serve over plain HTTP, no TLS
   http_only?: boolean
+  // NTLM authentication passthrough. Omitted means false.
+  ntlm_enabled?: boolean
   // Custom error pages: map of status code string → HTML body
   error_pages?: Record<string, string>
   // Custom header injection rules

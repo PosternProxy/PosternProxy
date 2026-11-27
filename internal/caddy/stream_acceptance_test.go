@@ -47,9 +47,10 @@ func requirePinnedCaddyBinary(t *testing.T) string {
 		return match[1]
 	}
 	for module, version := range map[string]string{
-		"github.com/caddyserver/caddy/v2":  pin("CADDY_VERSION"),
-		"github.com/mholt/caddy-l4":        pin("CADDY_L4_VERSION"),
-		"github.com/mholt/caddy-ratelimit": pin("CADDY_RATELIMIT_VERSION"),
+		"github.com/caddyserver/caddy/v2":        pin("CADDY_VERSION"),
+		"github.com/mholt/caddy-l4":              pin("CADDY_L4_VERSION"),
+		"github.com/mholt/caddy-ratelimit":       pin("CADDY_RATELIMIT_VERSION"),
+		"github.com/PosternProxy/ntlm-transport": pin("CADDY_NTLM_VERSION"),
 	} {
 		found := false
 		for _, dep := range info.Deps {

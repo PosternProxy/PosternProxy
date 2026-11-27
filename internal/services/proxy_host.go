@@ -23,7 +23,7 @@ const proxyHostColumns = `
 	hc_active_expect_status, hc_passive_fail_duration, hc_passive_max_fails,
 	hc_passive_unhealthy_latency,
 	rate_limit_enabled, rate_limit_requests, rate_limit_window,
-	tls_passthrough, http_only,
+	tls_passthrough, http_only, ntlm_enabled,
 	error_pages,
 	custom_headers,
 	extra_upstreams, lb_policy,
@@ -75,32 +75,11 @@ func (s *ProxyHostService) GetByID(ctx context.Context, id int64) (*models.Proxy
 }
 
 func (s *ProxyHostService) Create(ctx context.Context, callerID *int64, input models.CreateProxyHostInput, ip string) (*models.ProxyHost, error) {
-	if err := validateProxyHostInput(input.DomainNames, input.ForwardHost, input.ForwardPort); err != nil {
-		return nil, err
-	}
-	if err := validateAdvancedConfig(input.AdvancedConfig); err != nil {
-		return nil, err
-	}
 	if input.ServerID == 0 {
 		input.ServerID = 1
 	}
-	if string(input.Locations) == "" {
-		input.Locations = json.RawMessage("[]")
-	}
-	if input.RateLimitWindow == "" {
-		input.RateLimitWindow = "1m"
-	}
-	if len(input.ErrorPages) == 0 {
-		input.ErrorPages = json.RawMessage("{}")
-	}
-	if len(input.CustomHeaders) == 0 {
-		input.CustomHeaders = json.RawMessage("[]")
-	}
-	if len(input.ExtraUpstreams) == 0 {
-		input.ExtraUpstreams = json.RawMessage("[]")
-	}
-	if input.LBPolicy == "" {
-		input.LBPolicy = "random"
+	if err := prepareProxyHostInput(&input); err != nil {
+		return nil, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -118,9 +97,9 @@ func (s *ProxyHostService) Create(ctx context.Context, callerID *int64, input mo
 		   hc_active_expect_status, hc_passive_fail_duration, hc_passive_max_fails,
 		   hc_passive_unhealthy_latency,
 		   rate_limit_enabled, rate_limit_requests, rate_limit_window,
-		   tls_passthrough, http_only, error_pages, custom_headers,
+		   tls_passthrough, http_only, ntlm_enabled, error_pages, custom_headers,
 		   extra_upstreams, lb_policy)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		input.ServerID, string(input.DomainNames), input.ForwardScheme,
 		input.ForwardHost, input.ForwardPort, input.CertificateID,
 		boolToInt(input.SSLForced), boolToInt(input.HSTSEnabled),
@@ -131,7 +110,7 @@ func (s *ProxyHostService) Create(ctx context.Context, callerID *int64, input mo
 		nullableInt(input.HCPassiveFailDuration), nullableInt(input.HCPassiveMaxFails),
 		nullableInt(input.HCPassiveUnhealthyLatency),
 		boolToInt(input.RateLimitEnabled), input.RateLimitRequests, input.RateLimitWindow,
-		boolToInt(input.TLSPassthrough), boolToInt(input.HTTPOnly), string(input.ErrorPages), string(input.CustomHeaders),
+		boolToInt(input.TLSPassthrough), boolToInt(input.HTTPOnly), boolToInt(input.NTLMEnabled), string(input.ErrorPages), string(input.CustomHeaders),
 		string(input.ExtraUpstreams), input.LBPolicy,
 	)
 	if err != nil {
@@ -173,39 +152,18 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 	if err != nil || existing == nil {
 		return nil, fmt.Errorf("proxy host not found")
 	}
-	// Snapshot BEFORE mutation so rollback restores the prior state.
+	if err := prepareProxyHostInput(&input); err != nil {
+		return nil, err
+	}
+	if input.ServerID == 0 {
+		input.ServerID = existing.ServerID
+	}
+	// Snapshot the pre-image only after validation. A rejected update writes
+	// no history row and does not bump desired_revision.
 	if s.history != nil {
 		if err := s.history.Snapshot(ctx, "proxy_host", id, "update", existing, callerID); err != nil {
 			log.Warn().Err(err).Int64("proxy_host_id", id).Msg("failed to snapshot proxy host before update")
 		}
-	}
-	if err := validateProxyHostInput(input.DomainNames, input.ForwardHost, input.ForwardPort); err != nil {
-		return nil, err
-	}
-	if err := validateAdvancedConfig(input.AdvancedConfig); err != nil {
-		return nil, err
-	}
-	if string(input.Locations) == "" {
-		input.Locations = json.RawMessage("[]")
-	}
-	if input.RateLimitWindow == "" {
-		input.RateLimitWindow = "1m"
-	}
-	if len(input.ErrorPages) == 0 {
-		input.ErrorPages = json.RawMessage("{}")
-	}
-	if len(input.CustomHeaders) == 0 {
-		input.CustomHeaders = json.RawMessage("[]")
-	}
-	if len(input.ExtraUpstreams) == 0 {
-		input.ExtraUpstreams = json.RawMessage("[]")
-	}
-	if input.LBPolicy == "" {
-		input.LBPolicy = "random"
-	}
-
-	if input.ServerID == 0 {
-		input.ServerID = existing.ServerID
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE proxy_hosts SET
@@ -217,7 +175,7 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 		  hc_active_expect_status=?, hc_passive_fail_duration=?, hc_passive_max_fails=?,
 		  hc_passive_unhealthy_latency=?,
 		  rate_limit_enabled=?, rate_limit_requests=?, rate_limit_window=?,
-		  tls_passthrough=?, http_only=?, error_pages=?, custom_headers=?,
+		  tls_passthrough=?, http_only=?, ntlm_enabled=?, error_pages=?, custom_headers=?,
 		  extra_upstreams=?, lb_policy=?,
 		  updated_at=datetime('now')
 		WHERE id=?`,
@@ -230,7 +188,7 @@ func (s *ProxyHostService) Update(ctx context.Context, callerID *int64, id int64
 		nullableInt(input.HCPassiveFailDuration), nullableInt(input.HCPassiveMaxFails),
 		nullableInt(input.HCPassiveUnhealthyLatency),
 		boolToInt(input.RateLimitEnabled), input.RateLimitRequests, input.RateLimitWindow,
-		boolToInt(input.TLSPassthrough), boolToInt(input.HTTPOnly), string(input.ErrorPages), string(input.CustomHeaders),
+		boolToInt(input.TLSPassthrough), boolToInt(input.HTTPOnly), boolToInt(input.NTLMEnabled), string(input.ErrorPages), string(input.CustomHeaders),
 		string(input.ExtraUpstreams), input.LBPolicy,
 		id,
 	)
@@ -324,8 +282,8 @@ func scanProxyHost(row *sql.Row) (*models.ProxyHost, error) {
 func scanProxyHostRow(row scanner) (*models.ProxyHost, error) {
 	var h models.ProxyHost
 	var (
-		sslForced, hstsEnabled, hstsSubdomains, hcEnabled int
-		rateLimitEnabled, tlsPassthrough, httpOnly        int
+		sslForced, hstsEnabled, hstsSubdomains, hcEnabled       int
+		rateLimitEnabled, tlsPassthrough, httpOnly, ntlmEnabled int
 	)
 	var (
 		domainNames, locations, errorPages, customHeaders, extraUpstreams, lbPolicy string
@@ -342,7 +300,7 @@ func scanProxyHostRow(row scanner) (*models.ProxyHost, error) {
 		&hcActiveExpectStatus, &hcPassiveFailDuration, &hcPassiveMaxFails,
 		&hcPassiveUnhealthyLatency,
 		&rateLimitEnabled, &h.RateLimitRequests, &h.RateLimitWindow,
-		&tlsPassthrough, &httpOnly,
+		&tlsPassthrough, &httpOnly, &ntlmEnabled,
 		&errorPages,
 		&customHeaders,
 		&extraUpstreams, &lbPolicy,
@@ -380,6 +338,7 @@ func scanProxyHostRow(row scanner) (*models.ProxyHost, error) {
 	h.RateLimitEnabled = rateLimitEnabled == 1
 	h.TLSPassthrough = tlsPassthrough == 1
 	h.HTTPOnly = httpOnly == 1
+	h.NTLMEnabled = ntlmEnabled == 1
 	if hcActivePath.Valid {
 		h.HCActivePath = hcActivePath.String
 	}
@@ -415,6 +374,42 @@ func validateAdvancedConfig(s string) error {
 		return fmt.Errorf("advanced config must be a JSON object")
 	}
 	return nil
+}
+
+func prepareProxyHostInput(input *models.CreateProxyHostInput) error {
+	if err := validateProxyHostInput(input.DomainNames, input.ForwardHost, input.ForwardPort); err != nil {
+		return err
+	}
+	if err := validateAdvancedConfig(input.AdvancedConfig); err != nil {
+		return err
+	}
+	if string(input.Locations) == "" {
+		input.Locations = json.RawMessage("[]")
+	}
+	if input.RateLimitWindow == "" {
+		input.RateLimitWindow = "1m"
+	}
+	if len(input.ErrorPages) == 0 {
+		input.ErrorPages = json.RawMessage("{}")
+	}
+	if len(input.CustomHeaders) == 0 {
+		input.CustomHeaders = json.RawMessage("[]")
+	}
+	if len(input.ExtraUpstreams) == 0 {
+		input.ExtraUpstreams = json.RawMessage("[]")
+	}
+	if input.LBPolicy == "" {
+		input.LBPolicy = "random"
+	}
+	return models.ValidateNTLMPassthrough(models.NTLMPassthrough{
+		Enabled:        input.NTLMEnabled,
+		TLSPassthrough: input.TLSPassthrough,
+		AdvancedConfig: input.AdvancedConfig,
+		Locations:      input.Locations,
+		ExtraUpstreams: input.ExtraUpstreams,
+		CustomHeaders:  input.CustomHeaders,
+		ErrorPages:     input.ErrorPages,
+	})
 }
 
 func validateProxyHostInput(domainNames json.RawMessage, host string, port int) error {

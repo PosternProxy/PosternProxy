@@ -281,7 +281,7 @@ func registerRollbackHandlers(historySvc *services.ConfigHistoryService, proxyHo
 			HCPassiveUnhealthyLatency: h.HCPassiveUnhealthyLatency,
 			RateLimitEnabled:          h.RateLimitEnabled, RateLimitRequests: h.RateLimitRequests,
 			RateLimitWindow: h.RateLimitWindow, TLSPassthrough: h.TLSPassthrough,
-			HTTPOnly:   h.HTTPOnly,
+			HTTPOnly: h.HTTPOnly, NTLMEnabled: h.NTLMEnabled,
 			ErrorPages: h.ErrorPages, CustomHeaders: h.CustomHeaders,
 			ExtraUpstreams: h.ExtraUpstreams, LBPolicy: h.LBPolicy,
 		}

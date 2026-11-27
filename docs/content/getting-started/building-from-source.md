@@ -66,8 +66,9 @@ Windows install path.
 1. Builds the Vue frontend (`npm ci && npm run build`) and embeds it into the
    controller binary via `go:embed`.
 2. Compiles the controller and agent as static binaries (`CGO_ENABLED=0`).
-3. Builds Caddy with `xcaddy`, adding the `caddy-l4` and `caddy-ratelimit` plugins
-   (installing `xcaddy` on the build host if needed).
+3. Builds Caddy with `xcaddy`, adding the `caddy-l4`, `caddy-ratelimit`, and pinned `http_ntlm` plugins
+   (installing `xcaddy` on the build host if needed). `http_ntlm` comes from the Apache-2.0
+   `github.com/PosternProxy/ntlm-transport` fork. It is a legacy transport, and IIS behavior is not verified.
 4. Writes SHA-256 checksums for the three binaries.
 
 The agent is included in every full build as a separate executable. It is not

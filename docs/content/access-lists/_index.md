@@ -43,8 +43,7 @@ With these `allow` rules, any address outside the listed ranges is denied.
 ## Assigning an access list to a proxy host
 
 1. Open the Add/Edit Proxy Host modal
-2. Go to the **Security** tab
-3. Select the access list from the **Access List** dropdown
+2. Select the access list from the **Access List** dropdown on the basic host form, or on the **SSL** tab
 
 A proxy host can only be assigned one access list at a time. Access lists can be
 reused across multiple proxy hosts.

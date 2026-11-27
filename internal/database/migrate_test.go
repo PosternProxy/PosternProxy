@@ -64,6 +64,10 @@ func TestBaselineUpgradePreservesData(t *testing.T) {
 	if host != "127.0.0.1" {
 		t.Fatalf("baseline host changed: %q", host)
 	}
+	var ntlm int
+	if err := db.QueryRow(`SELECT ntlm_enabled FROM proxy_hosts WHERE domain_names = '["baseline.test"]'`).Scan(&ntlm); err != nil || ntlm != 0 {
+		t.Fatalf("existing host NTLM default: %d %v", ntlm, err)
+	}
 	rows, err := db.Query("PRAGMA foreign_key_check")
 	if err != nil {
 		t.Fatal(err)

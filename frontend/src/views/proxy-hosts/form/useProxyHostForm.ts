@@ -1,6 +1,8 @@
 import { inject, provide, reactive, ref, type InjectionKey, type Ref } from 'vue'
+import axios from 'axios'
 import type { ProxyHost, ProxyHostLocation, CustomHeaderRule, ExtraUpstream } from '@/types'
 import { createProxyHost, updateProxyHost, type CreateProxyHostInput } from '@/api/proxyHosts'
+import { errorMessage } from '@/utils/errors'
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -25,6 +27,7 @@ export type ProxyHostForm = CreateProxyHostInput & {
   rate_limit_window: string
   tls_passthrough: boolean
   http_only: boolean
+  ntlm_enabled: boolean
   error_pages: Record<string, string>
   custom_headers: CustomHeaderRule[]
   extra_upstreams: ExtraUpstream[]
@@ -124,6 +127,7 @@ function defaultForm(): ProxyHostForm {
     rate_limit_window: '1m',
     tls_passthrough: false,
     http_only: false,
+    ntlm_enabled: false,
     error_pages: { '502': '', '503': '' },
     custom_headers: [],
     extra_upstreams: [],
@@ -138,6 +142,7 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
   const activeTab = ref<TabId>('details')
   const showAdvanced = ref(false)
   const sslMode = ref<SslMode>('auto')
+  const persistedHostID = ref<number | null>(null)
 
   // ── SSL mode ──────────────────────────────────────────────────────────────
 
@@ -226,6 +231,7 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
     if (host === null) {
       Object.assign(form, { ...defaultForm(), server_id: defaultServerId })
       showAdvanced.value = false
+      persistedHostID.value = null
     } else {
       Object.assign(form, {
         domainInput: '',
@@ -254,6 +260,7 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
         rate_limit_window: host.rate_limit_window || '1m',
         tls_passthrough: host.tls_passthrough ?? false,
         http_only: host.http_only ?? false,
+        ntlm_enabled: host.ntlm_enabled ?? false,
         error_pages: {
           '502': host.error_pages?.['502'] ?? '',
           '503': host.error_pages?.['503'] ?? '',
@@ -262,12 +269,14 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
         extra_upstreams: (host.extra_upstreams ?? []).map((u) => ({ ...u })),
         lb_policy: host.lb_policy || 'random',
       })
+      persistedHostID.value = host.id
       showAdvanced.value =
         (host.extra_upstreams?.length ?? 0) > 0 ||
         (host.locations?.length ?? 0) > 0 ||
         host.hc_enabled === true ||
         host.rate_limit_enabled === true ||
         host.tls_passthrough === true ||
+        host.ntlm_enabled === true ||
         Object.values(host.error_pages ?? {}).some((v) => v !== '') ||
         (host.custom_headers?.length ?? 0) > 0 ||
         (host.advanced_config ?? '').trim() !== ''
@@ -284,6 +293,12 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
     if (!form.forward_host) {
       saveError.value = 'Forward hostname is required.'
       activeTab.value = 'details'
+      throw new Error('validation')
+    }
+    const conflict = ntlmConflict(form)
+    if (conflict) {
+      saveError.value = conflict.message
+      activeTab.value = conflict.tab
       throw new Error('validation')
     }
 
@@ -316,6 +331,7 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
         rate_limit_window: form.rate_limit_window || '1m',
         tls_passthrough: form.tls_passthrough,
         http_only: form.http_only,
+        ntlm_enabled: form.ntlm_enabled,
         error_pages: Object.fromEntries(
           Object.entries(form.error_pages).filter(([, v]) => v.trim() !== '')
         ),
@@ -323,11 +339,14 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
         extra_upstreams: form.extra_upstreams.filter((u) => u.host.trim() !== ''),
         lb_policy: form.lb_policy || 'random',
       }
-      return existingHost === null
-        ? await createProxyHost(payload)
-        : await updateProxyHost(existingHost.id, payload)
+      const id = existingHost?.id ?? persistedHostID.value
+      const saved = id == null ? await createProxyHost(payload) : await updateProxyHost(id, payload)
+      persistedHostID.value = saved.id
+      return saved
     } catch (e: unknown) {
-      saveError.value = e instanceof Error ? e.message : 'Save failed'
+      const recovered = savedHostID(e)
+      if (recovered != null) persistedHostID.value = recovered
+      saveError.value = errorMessage(e)
       throw e
     } finally {
       saving.value = false
@@ -354,4 +373,74 @@ function createProxyHostFormAPI(): ProxyHostFormAPI {
     init,
     save,
   }
+}
+
+const ntlmMessages = {
+  extra: 'NTLM passthrough requires a single upstream; remove extra upstreams or disable it',
+  locations: 'NTLM passthrough cannot be combined with path locations',
+  tls: 'NTLM passthrough cannot be combined with TLS passthrough',
+  advanced: 'NTLM passthrough cannot be combined with advanced route JSON',
+  headers: 'NTLM passthrough cannot change the Authorization or WWW-Authenticate headers',
+  errorPage: 'NTLM passthrough cannot use a custom 401 error page',
+}
+
+function ntlmConflict(form: ProxyHostForm): { message: string; tab: TabId } | null {
+  if (!form.ntlm_enabled) return null
+  if (form.extra_upstreams.length > 0) return { message: ntlmMessages.extra, tab: 'upstreams' }
+  if ((form.locations?.length ?? 0) > 0) return { message: ntlmMessages.locations, tab: 'locations' }
+  if (form.tls_passthrough) return { message: ntlmMessages.tls, tab: 'security' }
+  const advanced = (form.advanced_config ?? '').trim()
+  if (advanced !== '' && advanced !== '{}') return { message: ntlmMessages.advanced, tab: 'advanced' }
+  if (form.custom_headers.some((rule) => ntlmHeaderForbidden(rule))) {
+    return { message: ntlmMessages.headers, tab: 'headers' }
+  }
+  for (const [code, body] of Object.entries(form.error_pages)) {
+    if (body.trim() === '') continue
+    const status = Number.parseInt(code, 10)
+    if (status === 401) return { message: ntlmMessages.errorPage, tab: 'errors' }
+  }
+  return null
+}
+
+function ntlmHeaderForbidden(rule: CustomHeaderRule): boolean {
+  const name = rule.name
+  if (name === '') return false
+  if (/[{}\r\n:]/.test(name)) return true
+  if (rule.operation === 'set' || rule.operation === 'add') {
+    const canon = canonicalHeader(name)
+    return (
+      (rule.direction === 'request' && canon === 'Authorization') ||
+      (rule.direction === 'response' && canon === 'Www-Authenticate')
+    )
+  }
+  if (rule.operation !== 'delete') return false
+  const field = name.toLowerCase()
+  const protectedName =
+    rule.direction === 'request'
+      ? 'authorization'
+      : rule.direction === 'response'
+        ? 'www-authenticate'
+        : ''
+  if (protectedName === '') return false
+  if (field === '*') return true
+  if (field.startsWith('*') && field.endsWith('*') && field.length >= 2) {
+    return protectedName.includes(field.slice(1, -1))
+  }
+  if (field.startsWith('*')) return protectedName.endsWith(field.slice(1))
+  if (field.endsWith('*')) return protectedName.startsWith(field.slice(0, -1))
+  return canonicalHeader(field) === canonicalHeader(protectedName)
+}
+
+function canonicalHeader(name: string): string {
+  return name
+    .split('-')
+    .map((part) => (part === '' ? '' : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()))
+    .join('-')
+}
+
+function savedHostID(error: unknown): number | null {
+  if (!axios.isAxiosError(error)) return null
+  const data = error.response?.data as { saved?: boolean; id?: number } | undefined
+  if (data?.saved === true && typeof data.id === 'number') return data.id
+  return null
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/posternproxy/posternproxy/internal/certstore"
+	"github.com/posternproxy/posternproxy/internal/models"
 	"sort"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ var tableColumns = map[string]map[string]bool{
 		"rate_limit_enabled", "rate_limit_requests", "rate_limit_window",
 		// misc feature columns
 		"tls_passthrough", "error_pages", "custom_headers",
-		"extra_upstreams", "lb_policy", "http_only",
+		"extra_upstreams", "lb_policy", "http_only", "ntlm_enabled",
 		"created_at", "updated_at",
 	),
 	"redirection_hosts": strset(
@@ -279,6 +280,11 @@ func UnmarshalPayload(data []byte) (*BackupPayload, error) {
 }
 
 func replaceBackupTables(ctx context.Context, tx *sql.Tx, payload *BackupPayload) (restored int, err error) {
+	for _, row := range payload.Tables["proxy_hosts"] {
+		if err := prepareBackupProxyHostRow(row); err != nil {
+			return 0, err
+		}
+	}
 	// Clear existing data in reverse FK order.
 	clearOrder := []string{
 		"settings",
@@ -311,6 +317,106 @@ func replaceBackupTables(ctx context.Context, tx *sql.Tx, payload *BackupPayload
 	}
 
 	return restored, nil
+}
+
+func prepareBackupProxyHostRow(row map[string]any) error {
+	_, present := row["ntlm_enabled"]
+	enabled, err := decodeBackupZeroOne(row["ntlm_enabled"], present)
+	if err != nil {
+		return fmt.Errorf("invalid ntlm_enabled value")
+	}
+	if present {
+		row["ntlm_enabled"] = int64(boolToInt(enabled))
+	}
+	if !enabled {
+		return nil
+	}
+	_, tlsPresent := row["tls_passthrough"]
+	tls, err := decodeBackupZeroOne(row["tls_passthrough"], tlsPresent)
+	if err != nil {
+		return fmt.Errorf("invalid tls_passthrough value")
+	}
+	advanced, err := backupString(row, "advanced_config")
+	if err != nil {
+		return err
+	}
+	locations, err := backupRaw(row, "locations")
+	if err != nil {
+		return err
+	}
+	extra, err := backupRaw(row, "extra_upstreams")
+	if err != nil {
+		return err
+	}
+	headers, err := backupRaw(row, "custom_headers")
+	if err != nil {
+		return err
+	}
+	pages, err := backupRaw(row, "error_pages")
+	if err != nil {
+		return err
+	}
+	return models.ValidateNTLMPassthrough(models.NTLMPassthrough{
+		Enabled:        true,
+		TLSPassthrough: tls,
+		AdvancedConfig: advanced,
+		Locations:      locations,
+		ExtraUpstreams: extra,
+		CustomHeaders:  headers,
+		ErrorPages:     pages,
+	})
+}
+
+func decodeBackupZeroOne(value any, present bool) (bool, error) {
+	if !present {
+		return false, nil
+	}
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case int64:
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
+	case float64:
+		if v == float64(int64(v)) && (v == 0 || v == 1) {
+			return v == 1, nil
+		}
+	}
+	return false, fmt.Errorf("invalid boolean value")
+}
+
+func backupString(row map[string]any, key string) (string, error) {
+	value, ok := row[key]
+	if !ok || value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s", models.NTLMErrJSON)
+	}
+	return text, nil
+}
+
+func backupRaw(row map[string]any, key string) (json.RawMessage, error) {
+	value, ok := row[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	switch v := value.(type) {
+	case string:
+		return json.RawMessage(v), nil
+	case []byte:
+		return json.RawMessage(append([]byte(nil), v...)), nil
+	case json.RawMessage:
+		return v, nil
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s", models.NTLMErrJSON)
+		}
+		return encoded, nil
+	}
 }
 
 func validateBackup(payload *BackupPayload) error {

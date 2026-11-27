@@ -85,8 +85,8 @@ func (s *CaddySyncService) SyncServer(ctx context.Context, serverID int64) error
 		return err
 	}
 	if err := s.applyServer(ctx, serverID, revision); err != nil {
-		if markErr := s.mark(ctx, serverID, revision, "failed", "Configuration application failed; retry or check server connectivity."); markErr != nil {
-			return fmt.Errorf("record application failure: %w", markErr)
+		if markErr := s.noteApplyFailure(ctx, serverID, revision, err.Error(), localApplyFailure); markErr != nil {
+			return markErr
 		}
 		return &ConfigApplyError{ServerID: serverID, cause: err}
 	}

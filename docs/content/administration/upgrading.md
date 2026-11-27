@@ -58,6 +58,16 @@ and rejects older agents that send their token in the WebSocket query string.
 Verify each agent reconnects and reports applied configuration in
 [Configuration application status]({{< relref "/multi-server/configuration-status" >}}).
 
+## NTLM passthrough and Caddy
+
+NTLM passthrough is a legacy option for older IIS apps that use Integrated Windows Authentication. IIS behavior is not verified. Limits that still apply: one upstream, a direct browser connection, no header rules that can change `Authorization` or `WWW-Authenticate`, no path locations, no custom 401 page, and no TLS passthrough. An intermediary that shares one connection across users can break per-user isolation, and terminating TLS here can conflict with IIS Extended Protection.
+
+The `ntlm_enabled` column is an additive default-off change. Hosts that already existed stay off. Enabling the Security tab control requires the pinned Caddy build, including `http.reverse_proxy.transport.http_ntlm`, on every server that will serve that host.
+
+Replace Caddy on each of those servers with the pinned build first. Then upgrade the controller and its agents together, enable the host, and retry synchronization. A successful UI save does not prove the remote Caddy binary contains the module. The configuration status has to reach `applied`. If Caddy rejects the module, the desired setting stays saved, the applied revision does not move, and the last loaded configuration keeps serving. Retry sync after the binary is replaced.
+
+One NTLM host that the route builder rejects blocks the new configuration for every host on that server. PosternProxy does not fall back to ordinary HTTP for that host. Correct or disable the host, then retry sync.
+
 ## Rollback
 
 Do not run an older binary against a database changed by newer migrations.

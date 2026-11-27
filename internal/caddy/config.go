@@ -34,6 +34,9 @@ func BuildFullConfig(in *BuildInput) (*Config, error) {
 		if !h.Enabled {
 			continue
 		}
+		if err := validateHostNTLM(&h); err != nil {
+			return nil, fmt.Errorf("proxy host %d: %w", h.ID, err)
+		}
 		if h.TLSPassthrough {
 			passthroughHosts = append(passthroughHosts, h)
 		} else if h.HTTPOnly {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/posternproxy/posternproxy/internal/models"
@@ -46,11 +47,7 @@ func (h *ProxyHostHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, err := h.svc.Create(r.Context(), &claims.UserID, input, r.RemoteAddr)
-	if err != nil {
-		respondServiceError(w, http.StatusBadRequest, err)
-		return
-	}
-	respondJSON(w, http.StatusCreated, host)
+	respondProxyHostWrite(w, host, err, http.StatusCreated)
 }
 
 // Get writes a single ProxyHost record looked up by URL parameter "id".
@@ -86,11 +83,25 @@ func (h *ProxyHostHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, err := h.svc.Update(r.Context(), &claims.UserID, id, input, r.RemoteAddr)
-	if err != nil {
-		respondServiceError(w, http.StatusBadRequest, err)
+	respondProxyHostWrite(w, host, err, http.StatusOK)
+}
+
+func respondProxyHostWrite(w http.ResponseWriter, host *models.ProxyHost, err error, okStatus int) {
+	if err == nil {
+		respondJSON(w, okStatus, host)
 		return
 	}
-	respondJSON(w, http.StatusOK, host)
+	var apply *services.ConfigApplyError
+	if host != nil && errors.As(err, &apply) {
+		respondJSON(w, http.StatusBadGateway, map[string]any{
+			"error":     apply.Error(),
+			"saved":     true,
+			"server_id": apply.ServerID,
+			"id":        host.ID,
+		})
+		return
+	}
+	respondServiceError(w, http.StatusBadRequest, err)
 }
 
 // Delete removes a ProxyHost record by URL parameter "id".

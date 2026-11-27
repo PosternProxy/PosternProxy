@@ -5,21 +5,21 @@ import "encoding/json"
 // ProxyHost is a reverse-proxy virtual host that forwards incoming requests to
 // an upstream service. It is the primary entity managed by the application.
 type ProxyHost struct {
-	ID               int64           `json:"id"`
-	ServerID         int64           `json:"server_id"`
-	DomainNames      json.RawMessage `json:"domain_names"`
-	ForwardScheme    string          `json:"forward_scheme"`
-	ForwardHost      string          `json:"forward_host"`
-	ForwardPort      int             `json:"forward_port"`
-	CertificateID    *int64          `json:"certificate_id"`
-	SSLForced        bool            `json:"ssl_forced"`
-	HSTSEnabled      bool            `json:"hsts_enabled"`
-	HSTSSubdomains   bool            `json:"hsts_subdomains"`
-	AccessListID     *int64          `json:"access_list_id"`
-	AdvancedConfig   string          `json:"advanced_config"`
-	Locations        json.RawMessage `json:"locations"`
-	Enabled          bool            `json:"enabled"`
-	CaddyID          string          `json:"caddy_id,omitempty"`
+	ID             int64           `json:"id"`
+	ServerID       int64           `json:"server_id"`
+	DomainNames    json.RawMessage `json:"domain_names"`
+	ForwardScheme  string          `json:"forward_scheme"`
+	ForwardHost    string          `json:"forward_host"`
+	ForwardPort    int             `json:"forward_port"`
+	CertificateID  *int64          `json:"certificate_id"`
+	SSLForced      bool            `json:"ssl_forced"`
+	HSTSEnabled    bool            `json:"hsts_enabled"`
+	HSTSSubdomains bool            `json:"hsts_subdomains"`
+	AccessListID   *int64          `json:"access_list_id"`
+	AdvancedConfig string          `json:"advanced_config"`
+	Locations      json.RawMessage `json:"locations"`
+	Enabled        bool            `json:"enabled"`
+	CaddyID        string          `json:"caddy_id,omitempty"`
 
 	// Health check configuration
 	HCEnabled                 bool   `json:"hc_enabled"`
@@ -42,6 +42,10 @@ type ProxyHost struct {
 	// HTTPOnly disables TLS entirely — host is served over HTTP only.
 	// Use for internal services that cannot satisfy Let's Encrypt HTTP-01.
 	HTTPOnly bool `json:"http_only"`
+
+	// NTLMEnabled selects the http_ntlm upstream transport. It is off when
+	// the column is absent from older rows and snapshots.
+	NTLMEnabled bool `json:"ntlm_enabled"`
 
 	// Custom error pages: JSON map of status code string → HTML body.
 	// e.g. {"404":"<html>…</html>","502":"<html>…</html>"}
@@ -92,18 +96,18 @@ type ProxyHostLocation struct {
 // CreateProxyHostInput carries all fields accepted when creating or updating a
 // ProxyHost. It is reused for both create and update operations.
 type CreateProxyHostInput struct {
-	ServerID         int64           `json:"server_id"`
-	DomainNames      json.RawMessage `json:"domain_names"`
-	ForwardScheme    string          `json:"forward_scheme"`
-	ForwardHost      string          `json:"forward_host"`
-	ForwardPort      int             `json:"forward_port"`
-	CertificateID    *int64          `json:"certificate_id"`
-	SSLForced        bool            `json:"ssl_forced"`
-	HSTSEnabled      bool            `json:"hsts_enabled"`
-	HSTSSubdomains   bool            `json:"hsts_subdomains"`
-	AccessListID     *int64          `json:"access_list_id"`
-	AdvancedConfig   string          `json:"advanced_config"`
-	Locations        json.RawMessage `json:"locations"`
+	ServerID       int64           `json:"server_id"`
+	DomainNames    json.RawMessage `json:"domain_names"`
+	ForwardScheme  string          `json:"forward_scheme"`
+	ForwardHost    string          `json:"forward_host"`
+	ForwardPort    int             `json:"forward_port"`
+	CertificateID  *int64          `json:"certificate_id"`
+	SSLForced      bool            `json:"ssl_forced"`
+	HSTSEnabled    bool            `json:"hsts_enabled"`
+	HSTSSubdomains bool            `json:"hsts_subdomains"`
+	AccessListID   *int64          `json:"access_list_id"`
+	AdvancedConfig string          `json:"advanced_config"`
+	Locations      json.RawMessage `json:"locations"`
 
 	// Health check configuration
 	HCEnabled                 bool   `json:"hc_enabled"`
@@ -125,6 +129,9 @@ type CreateProxyHostInput struct {
 
 	// HTTPOnly disables TLS — served over plain HTTP.
 	HTTPOnly bool `json:"http_only"`
+
+	// NTLMEnabled selects the http_ntlm upstream transport.
+	NTLMEnabled bool `json:"ntlm_enabled"`
 
 	// Custom error pages: JSON map of status code string → HTML body.
 	ErrorPages json.RawMessage `json:"error_pages"`

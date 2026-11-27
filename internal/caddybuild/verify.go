@@ -21,7 +21,7 @@ func VerifyArtifact(path string) error {
 	if info.GoVersion != pins["CADDY_GO_TOOLCHAIN"] {
 		return fmt.Errorf("Caddy artifact does not use the pinned patched Go toolchain")
 	}
-	want := map[string]string{"github.com/caddyserver/caddy/v2": pins["CADDY_VERSION"], "github.com/mholt/caddy-l4": pins["CADDY_L4_VERSION"], "github.com/mholt/caddy-ratelimit": pins["CADDY_RATELIMIT_VERSION"]}
+	want := map[string]string{"github.com/caddyserver/caddy/v2": pins["CADDY_VERSION"], "github.com/mholt/caddy-l4": pins["CADDY_L4_VERSION"], "github.com/mholt/caddy-ratelimit": pins["CADDY_RATELIMIT_VERSION"], "github.com/PosternProxy/ntlm-transport": pins["CADDY_NTLM_VERSION"]}
 	for _, dep := range info.Deps {
 		if version, ok := want[dep.Path]; ok && dep.Replace == nil && dep.Version == version && version != "" {
 			delete(want, dep.Path)

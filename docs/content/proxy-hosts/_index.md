@@ -29,7 +29,7 @@ The **Add / Edit Proxy Host** modal has the following tabs:
 | **SSL** | Certificate selection, HTTPS enforcement, HSTS |
 | **Locations** | Sub-path routing overrides |
 | **Health** | Active and passive health check settings |
-| **Security** | Access list, rate limiting |
+| **Security** | NTLM authentication passthrough, TLS passthrough, rate limiting |
 | **Errors** | Custom HTML for Caddy-generated 502/503 errors |
 | **Headers** | Request and response header injection |
 | **Advanced** | Raw Caddy JSON merged into the route |
@@ -43,7 +43,22 @@ The **Add / Edit Proxy Host** modal has the following tabs:
 | Forward Hostname / IP | Internal address of the service to proxy |
 | Port | Upstream port number |
 | Force HTTPS | Redirect HTTP to HTTPS (otherwise the host is served over HTTP) |
-| Access List | Restrict access by IP via an access list |
+| Access List | Restrict access by IP via an access list. Choose it on the basic host form and on the SSL tab. |
+
+## NTLM authentication passthrough
+
+**Legacy.** The Security tab checkbox is for older IIS apps that use Integrated Windows Authentication (NTLM/Negotiate). It is off for existing hosts, old backups, and history snapshots that predate the column. IIS behavior is not verified.
+
+Known limitations and risks:
+
+- One upstream, and a direct browser connection. An intermediary that shares one connection across users can break per-user isolation. Forwarded client headers are not the connection identity.
+- Do not add header rules, path locations, or a custom 401 page on this host. They break authentication and are rejected. TLS passthrough and nonempty advanced route JSON are rejected too.
+- Terminating TLS at PosternProxy can conflict with IIS Extended Protection. Do not disable Extended Protection or TLS verification to force the host to work.
+- Not verified against all IIS configurations. There is no upstream failover or NTLM load balancing. If the required IIS settings cannot be met, use TLS passthrough instead of this control.
+
+Turning the checkbox on emits the `http_ntlm` transport for that host only. Turning it off restores the ordinary HTTP transport on the next successful apply. Access lists, rate limits, HSTS, and health checks stay available. A health check that expects HTTP 200 marks the only upstream unhealthy when the probe receives 401. Point the check at an anonymous URL or leave it off.
+
+Every server that will use the flag must run the pinned Caddy build before the flag is enabled. Saving the host does not prove a remote Caddy has loaded the module. Check configuration status for `applied`. One NTLM host that cannot be rendered blocks applying a new configuration for every host on that server. PosternProxy does not fall back to ordinary HTTP. The previous Caddy configuration keeps serving, and the saved setting is left unchanged. Correct or disable the host, then retry sync.
 
 ## Enable / disable
 

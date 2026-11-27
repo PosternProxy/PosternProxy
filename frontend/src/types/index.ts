@@ -64,6 +64,8 @@ export interface ProxyHost {
   tls_passthrough: boolean
   // HTTP-only: serve over plain HTTP, no TLS
   http_only: boolean
+  // NTLM authentication passthrough. Older records omit it and mean false.
+  ntlm_enabled: boolean
   // Custom error pages: map of status code string → HTML body string
   // e.g. { "404": "<html>...</html>", "502": "<html>...</html>" }
   error_pages: Record<string, string>

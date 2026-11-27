@@ -41,7 +41,7 @@ func TestEmbeddedScriptParsesAsBash(t *testing.T) {
 fixture_caddy() {
     case "$1" in
         version) printf '%s\n' "$CADDY_VERSION" ;;
-        list-modules) printf 'layer4 %s\nhttp.handlers.rate_limit %s\n' "$CADDY_L4_VERSION" "$CADDY_RATELIMIT_VERSION" ;;
+        list-modules) printf 'layer4 %s\nhttp.handlers.rate_limit %s\nhttp.reverse_proxy.transport.http_ntlm %s\n' "$CADDY_L4_VERSION" "$CADDY_RATELIMIT_VERSION" "$CADDY_NTLM_VERSION" ;;
         *) return 1 ;;
     esac
 }

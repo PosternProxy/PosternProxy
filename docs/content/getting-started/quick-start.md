@@ -77,7 +77,7 @@ To protect a proxy host with IP allowlisting:
 
 1. Go to **Access Lists → Add Access List**
 2. Add client IP rules (CIDR ranges) with `allow` / `deny` directives
-3. Edit your proxy host and select the access list on the **Security** tab
+3. Edit your proxy host and select the access list. The dropdown is on the basic host form and on the **SSL** tab.
 
 <!-- TODO: Screenshot — Access List form with client IP rules -->
 

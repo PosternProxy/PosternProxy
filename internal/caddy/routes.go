@@ -11,6 +11,9 @@ import (
 
 // BuildProxyHostRoute generates a Caddy HTTP route for a proxy host.
 func BuildProxyHostRoute(h *models.ProxyHost, al *models.AccessList) (*Route, error) {
+	if err := validateHostNTLM(h); err != nil {
+		return nil, err
+	}
 	var domains []string
 	if err := json.Unmarshal(h.DomainNames, &domains); err != nil {
 		return nil, fmt.Errorf("parse domain names: %w", err)
@@ -168,7 +171,11 @@ func buildReverseProxyRoute(h *models.ProxyHost) *Route {
 		}
 	}
 
-	transport := &Transport{Protocol: "http"}
+	protocol := "http"
+	if h.NTLMEnabled {
+		protocol = "http_ntlm"
+	}
+	transport := &Transport{Protocol: protocol}
 	if h.ForwardScheme == "https" {
 		transport.TLS = &TLSOptions{HandshakeTimeout: "10s"}
 	}
@@ -267,6 +274,18 @@ func buildLocationRoute(loc models.ProxyHostLocation) *Route {
 		}},
 		Terminal: true,
 	}
+}
+
+func validateHostNTLM(h *models.ProxyHost) error {
+	return models.ValidateNTLMPassthrough(models.NTLMPassthrough{
+		Enabled:        h.NTLMEnabled,
+		TLSPassthrough: h.TLSPassthrough,
+		AdvancedConfig: h.AdvancedConfig,
+		Locations:      h.Locations,
+		ExtraUpstreams: h.ExtraUpstreams,
+		CustomHeaders:  h.CustomHeaders,
+		ErrorPages:     h.ErrorPages,
+	})
 }
 
 func clientHeaders() *HeaderOps {

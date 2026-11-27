@@ -1,0 +1,1 @@
+ALTER TABLE proxy_hosts ADD COLUMN ntlm_enabled INTEGER NOT NULL DEFAULT 0;

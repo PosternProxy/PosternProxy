@@ -9,6 +9,7 @@ A self-hosted reverse proxy manager built on [Caddy](https://caddyserver.com). P
 ## Features
 
 - **Proxy hosts** — reverse proxy with load balancing, health checks, rate limiting, custom headers, and per-path locations
+- **NTLM passthrough** — legacy, optional per-host forwarding of Windows authentication to one IIS upstream. The control ships off. IIS behavior is not verified.
 - **Redirection hosts** — HTTP 301/302/307/308 redirects
 - **Stream hosts** — TCP/UDP stream proxy and TLS passthrough via Caddy L4
 - **Dead hosts** — return 404 for parked domains
@@ -124,7 +125,7 @@ Prefer to build it yourself? See [Full production build](#full-production-build-
 | Go | 1.26+ |
 | Node.js | 20.19+ or 22.12+ |
 | npm | included with Node |
-| Caddy | built with `caddy-l4` and `caddy-ratelimit` plugins |
+| Caddy | built with `caddy-l4`, `caddy-ratelimit`, and the Apache-2.0 `http_ntlm` transport (`github.com/PosternProxy/ntlm-transport`, a fork of `caddyserver/ntlm-transport`) |
 
 ### 1. Install Caddy (with required plugins)
 
@@ -285,7 +286,7 @@ credential rotation, cross-architecture assets and readiness checks.
 
 | Layer | Technology |
 |---|---|
-| Proxy engine | [Caddy](https://caddyserver.com) with caddy-l4 and caddy-ratelimit |
+| Proxy engine | [Caddy](https://caddyserver.com) with caddy-l4, caddy-ratelimit, and http_ntlm |
 | Backend | Go, chi router, zerolog, modernc SQLite |
 | Frontend | Vue 3, Vite, TypeScript, Tailwind CSS, Pinia |
 | Database | SQLite (embedded, no external DB) |

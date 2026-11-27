@@ -32,6 +32,28 @@ const { form } = useProxyHostForm()
       </div>
     </div>
 
+    <div class="rounded-lg border border-slate-200 p-4">
+      <label class="flex cursor-pointer items-start gap-3">
+        <input
+          v-model="form.ntlm_enabled"
+          type="checkbox"
+          class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+        />
+        <div>
+          <p class="text-sm font-semibold text-slate-800">NTLM authentication passthrough</p>
+          <p class="mt-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+            <span class="font-semibold">Legacy.</span> For older IIS apps using Integrated Windows
+            Authentication (NTLM/Negotiate). Known limitations and risks: single upstream and direct
+            browser connections only — an intermediary that shares one connection across users can
+            break per-user isolation; do <span class="font-semibold">not</span> add header rules,
+            path locations, or custom 401 pages on this host (they break authentication and are
+            rejected); terminating TLS here can conflict with IIS Extended Protection. Not verified
+            against all IIS configurations.
+          </p>
+        </div>
+      </label>
+    </div>
+
     <!-- Rate Limiting -->
     <div class="rounded-lg border border-slate-200 p-4">
       <label class="mb-3 flex cursor-pointer items-start gap-3">
