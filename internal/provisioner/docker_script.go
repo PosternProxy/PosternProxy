@@ -18,7 +18,7 @@ func installDockerAgent(input ProvisionInput, c *sshClient, log func(string)) er
 	if strings.TrimSpace(uid.String()) != "0" {
 		uid.Reset()
 		if err := c.run("sudo -n id -u", &uid); err != nil || strings.TrimSpace(uid.String()) != "0" {
-			return fmt.Errorf("Docker provisioning requires root or passwordless sudo")
+			return fmt.Errorf("docker provisioning requires root or passwordless sudo")
 		}
 		prefix = "sudo -n "
 	}
@@ -72,7 +72,7 @@ func installDockerAgent(input ProvisionInput, c *sshClient, log func(string)) er
 	err := c.run(prefix+"bash "+shellQuote(dir+"/install.sh")+" "+shellQuote(image)+" "+shellQuote(dir+"/agent.env"), writer)
 	writer.flush()
 	if err != nil {
-		return fmt.Errorf("Docker installation failed: %w", err)
+		return fmt.Errorf("docker installation failed: %w", err)
 	}
 	return nil
 }

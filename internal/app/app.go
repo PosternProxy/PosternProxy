@@ -100,7 +100,6 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	tokenSvc := services.NewAPITokenService(db)
 	joinTokenSvc := services.NewJoinTokenService(db)
 	userSvc := services.NewUserService(db, auditSvc)
-	accessListSvc := services.NewAccessListService(db, auditSvc)
 	certSvc := services.NewCertificateService(db, cfg.CertDir, auditSvc, cfg.EncryptionKey)
 	if err := certSvc.ProtectExisting(ctx); err != nil {
 		log.Error().Err(err).Msg("certificate storage migration incomplete; repair missing files or replace affected certificates")
@@ -117,6 +116,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	// callback can close over caddySyncSvc once it is assigned below.
 	var caddySyncSvc *services.CaddySyncService
 	var serverSvc *services.ServerService
+	var accessListSvc *services.AccessListService
 
 	hub := agent.NewHub(
 		// onStatus: called on every heartbeat from any agent.
@@ -183,7 +183,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	tlsProbeSvc.Start(60 * time.Second)
 
 	// ── Background purge of expired join tokens ───────────────────────────
-	go func() {
+	go func() { // #nosec G118 -- intentional background task; a request-scoped context would cancel the hourly purge
 		t := time.NewTicker(1 * time.Hour)
 		defer t.Stop()
 		for {

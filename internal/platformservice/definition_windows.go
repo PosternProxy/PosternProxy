@@ -16,7 +16,7 @@ func protect(data []byte, decrypt bool) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty protected service configuration")
 	}
-	in := windows.DataBlob{Size: uint32(len(data)), Data: &data[0]}
+	in := windows.DataBlob{Size: uint32(len(data)), Data: &data[0]} // #nosec G115 -- service configuration length fits in uint32
 	var out windows.DataBlob
 	var err error
 	if decrypt {
@@ -27,8 +27,8 @@ func protect(data []byte, decrypt bool) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("protect service configuration: %w", err)
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
-	return bytes.Clone(unsafe.Slice(out.Data, int(out.Size))), nil
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data))) // #nosec G103 -- required Win32 DPAPI output-buffer handling
+	return bytes.Clone(unsafe.Slice(out.Data, int(out.Size))), nil    // #nosec G103 -- required Win32 DPAPI output-buffer handling
 }
 
 func WriteDefinition(path string, d Definition) error {
@@ -81,7 +81,7 @@ func ReadDefinition(path string) (Definition, error) {
 	if !info.Mode().IsRegular() || info.Size() > 72<<10 {
 		return d, fmt.Errorf("unsafe service configuration file")
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is a service-definition file chosen by the installer, not request input
 	if err != nil {
 		return d, err
 	}

@@ -156,7 +156,7 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 	if executable == "" {
 		return nil, fmt.Errorf("required system command %s is not installed", name)
 	}
-	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd := exec.CommandContext(ctx, executable, args...) // #nosec G204 -- runs a resolved system command with a fixed argument list, not user input
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "DEBIAN_FRONTEND=noninteractive", "LANG=C.UTF-8"}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -316,7 +316,7 @@ func (i *installation) apply(ctx context.Context, stage string) error {
 		if i.agentConfig != nil && binary.name == "posternproxy" {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(i.path(binary.dest)), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(i.path(binary.dest)), 0755); err != nil { // #nosec G301 -- install directory holds world-readable binaries; 0755 is intended
 			return err
 		}
 		if err := copyFile(filepath.Join(stage, binary.name), i.path(binary.dest), 0755); err != nil {
@@ -399,14 +399,14 @@ func (i installation) writeSystemFile(name, content string, mode os.FileMode, pr
 			return err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil { // #nosec G301 -- install directory holds world-readable files; 0755 is intended
 		return err
 	}
 	return atomicWrite(path, strings.NewReader(content), mode)
 }
 
 func copyFile(src, dest string, mode os.FileMode) error {
-	f, err := os.Open(src)
+	f, err := os.Open(src) // #nosec G304 -- src is an install artifact path chosen by the installer, not request input
 	if err != nil {
 		return fmt.Errorf("open installation binary: %w", err)
 	}

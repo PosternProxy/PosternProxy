@@ -154,7 +154,7 @@ func (h *ServerHandler) ProvisionLog(w http.ResponseWriter, r *http.Request) {
 			// manually reprovision instead of waiting forever.
 			status = "error"
 		}
-		fmt.Fprintf(w, "event: done\ndata: %s\n\n", status)
+		fmt.Fprintf(w, "event: done\ndata: %s\n\n", status) // #nosec G705 -- SSE text/event-stream, not HTML; status is a server-generated value
 		return
 	}
 
@@ -206,7 +206,7 @@ func streamRun(w http.ResponseWriter, r *http.Request, run *services.ProvisionRu
 
 	history, live := run.Subscribe()
 	for _, line := range history {
-		fmt.Fprintf(w, "data: %s\n\n", line)
+		fmt.Fprintf(w, "data: %s\n\n", line) // #nosec G705 -- SSE text/event-stream, not HTML; line is a server-generated log line
 	}
 	if canFlush {
 		flusher.Flush()

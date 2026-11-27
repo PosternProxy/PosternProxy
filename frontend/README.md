@@ -33,7 +33,7 @@ src/
 ## Prerequisites
 
 - Node `^20.19.0 || >=22.12.0`
-- A running controller backend on `http://localhost:81` (default `make dev-backend`)
+- A running controller backend on `http://localhost:81` (`go run ./cmd/posternproxy`)
 - For the HTTP development UI, set `POSTERNPROXY_BEHIND_TLS_PROXY=false` on the
   backend and allow `http://localhost:3000` with `POSTERNPROXY_ALLOWED_ORIGINS`
 
@@ -45,8 +45,8 @@ npm run dev          # Vite dev server with HMR, proxies /api and /ws → :81
 ```
 
 Vite serves on `http://localhost:3000`. The dev server proxies `/api/*`
-and `/ws/*` to the Go controller — start the controller first (or run
-`make dev` from the repo root to print the two-terminal instructions).
+and `/ws/*` to the Go controller — start the controller first
+(`go run ./cmd/posternproxy` from the repo root).
 Set `POSTERNPROXY_DEV_API` when starting Vite to override the backend target.
 
 ## Build

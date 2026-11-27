@@ -41,7 +41,7 @@ func TestAgentControllerPreflightRejectsRedirectWithoutLeakingToken(t *testing.T
 		if r.Header.Get("Authorization") != "Bearer disposable" || r.URL.Query().Get("server_id") != "2" {
 			t.Error("missing identity")
 		}
-		http.Redirect(w, r, destination.URL, 302)
+		http.Redirect(w, r, destination.URL, http.StatusFound)
 	}))
 	defer origin.Close()
 	err := verifyControllerIdentity(context.Background(), agentconfig.Config{ControllerURL: origin.URL, Token: "disposable", ServerID: 2})

@@ -20,7 +20,7 @@ func ParseTrustedProxyPolicies(raw string) (map[int64][]string, error) {
 	d := json.NewDecoder(strings.NewReader(raw))
 	start, err := d.Token()
 	if err != nil || start != json.Delim('{') {
-		return nil, fmt.Errorf("Caddy trusted proxies must be a JSON object keyed by server ID")
+		return nil, fmt.Errorf("caddy trusted proxies must be a JSON object keyed by server ID")
 	}
 	for d.More() {
 		key, err := d.Token()

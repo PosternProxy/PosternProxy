@@ -77,7 +77,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- HttpOnly + SameSite=Strict + scoped Path; Secure is config-driven (true behind the TLS proxy)
 		Name:     "refresh_token",
 		Value:    tokens.RefreshToken,
 		Path:     "/api/auth",
@@ -110,7 +110,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- HttpOnly + SameSite=Strict + scoped Path; Secure is config-driven (true behind the TLS proxy)
 		Name:     "refresh_token",
 		Value:    tokens.RefreshToken,
 		Path:     "/api/auth",
@@ -131,7 +131,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit.Log(r.Context(), &claims.UserID, "logout", "session", nil, nil, r.RemoteAddr)
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- cleared refresh cookie keeps HttpOnly + SameSite=Strict + scoped Path; Secure is config-driven
 		Name:     "refresh_token",
 		Value:    "",
 		Path:     "/api/auth",

@@ -2,6 +2,16 @@
 
 **Project:** PosternProxy — self-hosted reverse proxy manager on Caddy with native multi-server support via outbound agents.
 
+## Checks
+
+Run `go run ./scripts/check` before claiming work is done. It is the single command
+that runs every check — gofmt, `go vet`, staticcheck, complexity and file-size limits,
+tests, security scanners (gosec, govulncheck, gitleaks), and the frontend type-check,
+lint, build and dependency audit. It needs only the Go toolchain, so the same command
+runs on Windows, Linux, and CI, and a green run locally means what CI enforces. Flags:
+`-go` or `-frontend` for one half, `-fast` to skip network-fetched tools, `-race` to
+add the race detector to the Go tests.
+
 ## Core Architecture
 - Single static Go binary (controller) with embedded Vue 3 frontend.
 - Remote servers run lightweight `posternproxy-agent` that maintains outbound WebSocket connection only.
@@ -20,8 +30,7 @@ The project emphasizes operational features such as SSH-based server provisionin
 ## Development Workflow
 - Before starting significant work, review documents in the `.agentplans/` directory for relevant context on current initiatives and priorities.
 - Update `CHANGELOG.md` (Unreleased section) for user-facing or architectural changes.
-- Run `go test ./... && go build ./...` (or `make test build`) before committing non-trivial Go changes.
-- For frontend: run `npm run type-check && npm run build` from `frontend/`.
+- Run `go run ./scripts/check` (add `-go` or `-frontend` to scope it) before committing non-trivial changes; see the Checks section above.
 - Prefer small, focused changes. Update docs (README, LICENSING.md, etc.) in the same change when behavior shifts.
 - AI agents: keep changes minimal, follow existing patterns, and consider commercial implications of every modification.
 

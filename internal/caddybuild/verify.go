@@ -19,7 +19,7 @@ func VerifyArtifact(path string) error {
 		return fmt.Errorf("read Caddy build information: %w", err)
 	}
 	if info.GoVersion != pins["CADDY_GO_TOOLCHAIN"] {
-		return fmt.Errorf("Caddy artifact does not use the pinned patched Go toolchain")
+		return fmt.Errorf("caddy artifact does not use the pinned patched Go toolchain")
 	}
 	want := map[string]string{"github.com/caddyserver/caddy/v2": pins["CADDY_VERSION"], "github.com/mholt/caddy-l4": pins["CADDY_L4_VERSION"], "github.com/mholt/caddy-ratelimit": pins["CADDY_RATELIMIT_VERSION"], "github.com/PosternProxy/ntlm-transport": pins["CADDY_NTLM_VERSION"]}
 	for _, dep := range info.Deps {
@@ -44,11 +44,11 @@ func VerifyArtifact(path string) error {
 			}
 		}
 		if !matched {
-			return fmt.Errorf("Caddy artifact lacks a pinned security dependency update")
+			return fmt.Errorf("caddy artifact lacks a pinned security dependency update")
 		}
 	}
 	if len(want) != 0 {
-		return fmt.Errorf("Caddy artifact does not match the pinned core/plugin contract")
+		return fmt.Errorf("caddy artifact does not match the pinned core/plugin contract")
 	}
 	return nil
 }

@@ -112,7 +112,7 @@ func Provision(input ProvisionInput, logCh chan<- string, resultCh chan<- Result
 	}
 
 	if input.DeploymentType == "docker" && !regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$`).MatchString(input.Version) {
-		finish(fmt.Errorf("Docker provisioning requires a released controller version and its matching agent image"))
+		finish(fmt.Errorf("docker provisioning requires a released controller version and its matching agent image"))
 		return
 	}
 	log(fmt.Sprintf("[%s] Connecting to %s:%d...", timestamp(), input.Host, input.SSHPort))

@@ -167,7 +167,7 @@ func (s *TLSProbeService) probe(domain string) TLSProbeStatus {
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: 5 * time.Second},
 		"tcp", s.addr,
-		&tls.Config{ServerName: domain, InsecureSkipVerify: true},
+		&tls.Config{ServerName: domain, InsecureSkipVerify: true}, // #nosec G402 -- probe-only TLS to the local Caddy listener; reads the served cert, sends no data; expiry and hostname are checked explicitly
 	)
 	if err != nil {
 		return TLSProbeStatus{Status: TLSProbeFailed, Detail: "TLS handshake unavailable; certificate issuance may still be pending. Check Caddy logs for the exact issuer error."}

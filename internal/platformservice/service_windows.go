@@ -128,7 +128,7 @@ func (h *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, 
 }
 
 func runCaddy(ctx context.Context, d Definition, output *os.File) error {
-	command := exec.Command(d.CaddyExecutable, "run", "--config", d.CaddyConfig)
+	command := exec.Command(d.CaddyExecutable, "run", "--config", d.CaddyConfig) // #nosec G204 -- launches the project's own pinned Caddy binary with fixed arguments
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	command.Stdout, command.Stderr = output, output
 	if err := command.Start(); err != nil {
@@ -160,7 +160,7 @@ func runCaddy(ctx context.Context, d Definition, output *os.File) error {
 				return err
 			}
 			<-done
-			return fmt.Errorf("Caddy did not stop gracefully")
+			return fmt.Errorf("caddy did not stop gracefully")
 		}
 	}
 }
@@ -172,11 +172,11 @@ func caddyJob(pid int) (windows.Handle, error) {
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil { // #nosec G103 -- required Win32 job-object syscall
 		windows.CloseHandle(job)
 		return 0, err
 	}
-	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
+	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid)) // #nosec G115 -- a process ID fits in uint32 on Windows
 	if err != nil {
 		windows.CloseHandle(job)
 		return 0, err

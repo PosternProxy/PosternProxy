@@ -26,7 +26,7 @@ import (
 
 func installWindows(ctx context.Context, opts Options, enrollment *agentconfig.Config, version string) error {
 	if runtime.GOARCH != "amd64" {
-		return fmt.Errorf("Windows installation supports amd64 only")
+		return fmt.Errorf("windows installation supports amd64 only")
 	}
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return fmt.Errorf("install requires an elevated administrator terminal")
@@ -210,7 +210,7 @@ func installWindows(ctx context.Context, opts Options, enrollment *agentconfig.C
 		urls = append(urls, "http://"+net.JoinHostPort(host, port)+"/api/version")
 	}
 	if err := waitWindowsReady(ctx, services, urls...); err != nil {
-		return fmt.Errorf("Windows services did not become ready; inspect protected service logs: %w", err)
+		return fmt.Errorf("windows services did not become ready; inspect protected service logs: %w", err)
 	}
 	if enrollment == nil {
 		if err := os.Remove(definition.BootstrapPath); err != nil && !os.IsNotExist(err) {

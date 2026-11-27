@@ -66,7 +66,7 @@ func (i *installation) prepareInitialAdmin() error {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("initial admin staging must be a private directory")
 		}
-		if err := os.Chmod(directory, 0700); err != nil {
+		if err := os.Chmod(directory, 0700); err != nil { // #nosec G302 -- 0700 on the private credential directory is intended
 			return err
 		}
 		if err := atomicWrite(i.path(initialAdminEnvironment), strings.NewReader("POSTERNPROXY_ADMIN_PASSWORD="+strconv.Quote(password)+"\n"), 0600); err != nil {

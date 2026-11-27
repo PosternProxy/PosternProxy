@@ -61,7 +61,7 @@ func ensureCSRFCookie(w http.ResponseWriter, r *http.Request, secure bool) {
 		return
 	}
 	token := generateCSRFToken()
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- double-submit CSRF cookie must be JS-readable (HttpOnly:false); Secure is config-driven
 		Name:     csrfCookieName,
 		Value:    token,
 		Path:     "/",

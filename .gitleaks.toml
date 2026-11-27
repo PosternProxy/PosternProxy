@@ -1,0 +1,13 @@
+# gitleaks configuration. Extends the bundled default ruleset and allowlists the
+# e2e test fixtures, which ship a disposable self-signed certificate and private
+# key used only by the Playwright suite — not a real credential.
+title = "PosternProxy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Disposable self-signed cert/key used only by the e2e test suite"
+paths = [
+  '''frontend/e2e/testdata/.*''',
+]

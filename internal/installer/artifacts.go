@@ -73,7 +73,7 @@ func download(ctx context.Context, client *http.Client, url, dest string, limit 
 }
 
 func copyBounded(dest string, src io.Reader, limit int64) error {
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) // #nosec G304 -- dest is an install staging path, not request input
 	if err != nil {
 		return fmt.Errorf("create staged asset: %w", err)
 	}
@@ -92,7 +92,7 @@ func copyBounded(dest string, src io.Reader, limit int64) error {
 }
 
 func verifyChecksum(path, expected string) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is an install artifact, not request input
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func stagePlatformArtifacts(ctx context.Context, opts Options, version, platform
 	} else if err := download(ctx, client, releaseBaseURL+tag+"/checksums.txt", manifestPath, 1<<20); err != nil {
 		return err
 	}
-	manifest, err := os.Open(manifestPath)
+	manifest, err := os.Open(manifestPath) // #nosec G304 -- manifest path is install-controlled, not request input
 	if err != nil {
 		return fmt.Errorf("open checksums.txt: %w", err)
 	}
@@ -191,7 +191,7 @@ func stagePlatformArtifacts(ctx context.Context, opts Options, version, platform
 		}
 		path := filepath.Join(dest, binary+suffix)
 		if opts.AssetsDir != "" {
-			src, err := os.Open(filepath.Join(opts.AssetsDir, name))
+			src, err := os.Open(filepath.Join(opts.AssetsDir, name)) // #nosec G304 -- assets dir is an operator-provided install path, not a network request
 			if err != nil {
 				return fmt.Errorf("open %s: %w", name, err)
 			}
@@ -212,7 +212,7 @@ func stagePlatformArtifacts(ctx context.Context, opts Options, version, platform
 		if err := verifyPlatformArchitecture(path, platform, arch); err != nil {
 			return err
 		}
-		if err := os.Chmod(path, 0700); err != nil {
+		if err := os.Chmod(path, 0700); err != nil { // #nosec G302 -- installed binary needs the owner-execute bit (0700)
 			return err
 		}
 	}

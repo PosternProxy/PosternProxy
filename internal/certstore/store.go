@@ -156,7 +156,7 @@ func (s Store) Load(certPath, keyPath string) (Pair, error) {
 		if err := noSymlinks(path); err != nil {
 			return p, err
 		}
-		f, err := os.Open(path)
+		f, err := os.Open(path) // #nosec G304 -- path is within the server's own certificate store, not request input
 		if err != nil {
 			return p, fmt.Errorf("open required certificate material: %w", err)
 		}
@@ -221,7 +221,7 @@ func stage(root, name string, cert, key []byte, dirMode, fileMode os.FileMode) (
 			if err := noSymlinks(filepath.Join(final, base)); err != nil {
 				return "", err
 			}
-			actual, err := os.ReadFile(filepath.Join(final, base))
+			actual, err := os.ReadFile(filepath.Join(final, base)) // #nosec G304 -- path is within the server's own certificate store, not request input
 			want := cert
 			if n == 1 {
 				want = key
@@ -264,7 +264,7 @@ func stage(root, name string, cert, key []byte, dirMode, fileMode os.FileMode) (
 		if n == 1 {
 			data = key
 		}
-		f, err := os.OpenFile(filepath.Join(tmp, base), os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
+		f, err := os.OpenFile(filepath.Join(tmp, base), os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode) // #nosec G304 -- path is within the server's own certificate store, not request input
 		if err != nil {
 			return "", err
 		}

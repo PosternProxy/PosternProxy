@@ -148,13 +148,11 @@ cd frontend && npm install && cd ..
 
 ```bash
 # Terminal 1 — backend
-make dev-backend
+go run ./cmd/posternproxy
 
 # Terminal 2 — frontend (Vite HMR)
-make dev-frontend
+cd frontend && npm run dev
 ```
-
-Or without make: `go run ./cmd/posternproxy` and `cd frontend && npm run dev`.
 
 ### 4. Open the UI
 
@@ -193,13 +191,15 @@ The `data/` directory is created automatically on first run.
 ### Quick build (Go binaries only)
 
 ```bash
-make build
+go build -o posternproxy ./cmd/posternproxy
+go build -o posternproxy-agent ./cmd/posternproxy-agent
 ```
 
-Builds `posternproxy` and `posternproxy-agent` for the current platform with version
-info embedded. It reuses `internal/ui/dist`, including any placeholder or stale
-UI files; use the full build for a deployable frontend. It does not build Caddy
-or create a checksum manifest.
+Builds `posternproxy` and `posternproxy-agent` for the current platform. It reuses
+`internal/ui/dist`, including any placeholder or stale UI files; use the full build
+for a deployable frontend. It does not build Caddy or create a checksum manifest.
+Plain `go build` falls back to Go's VCS build info for the version (or `"dev"`); the
+production scripts below embed a `git describe` version via `-ldflags`.
 
 ### Full production build (with embedded frontend)
 
@@ -222,8 +222,6 @@ build the pinned custom Caddy, and write `checksums.txt`. Linux/macOS outputs ar
 in the repository root; PowerShell outputs are in `bin/`. The supplied archive
 contains all four files. The agent is a separate executable, included in the
 same build and bundle; it is not embedded inside the controller.
-
-Run `make help` for additional developer targets.
 
 ---
 
@@ -296,7 +294,7 @@ credential rotation, cross-architecture assets and readiness checks.
 
 ## Versioning
 
-PosternProxy embeds a version string at build time via `-ldflags`. When built with `make build` or the build scripts, the version comes from `git describe --tags --always --dirty`. Plain `go build` (no ldflags) falls back to Go's VCS build info, or `"dev"`.
+PosternProxy embeds a version string at build time via `-ldflags`. When built with the build scripts, the version comes from `git describe --tags --always --dirty`. Plain `go build` (no ldflags) falls back to Go's VCS build info, or `"dev"`.
 
 The running version is logged at startup and available via `GET /api/version`.
 
@@ -316,8 +314,7 @@ PRs are expected to keep CI green.
 Before opening a pull request, ensure CI checks pass locally:
 
 ```bash
-make test      # Go tests
-make lint      # go vet + frontend lint
+go run ./scripts/check    # format, vet, lint, tests, security, frontend
 ```
 
 Contributors must complete the project's CLA before a contribution can be accepted. See [LICENSING.md](LICENSING.md) for details.

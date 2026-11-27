@@ -33,7 +33,7 @@ func (d Definition) validate() error {
 		return fmt.Errorf("bootstrap path must be absolute")
 	}
 	if d.Name == CaddyName && (!filepath.IsAbs(d.CaddyExecutable) || !filepath.IsAbs(d.CaddyConfig)) {
-		return fmt.Errorf("Caddy service executable and configuration paths must be absolute")
+		return fmt.Errorf("caddy service executable and configuration paths must be absolute")
 	}
 	return nil
 }

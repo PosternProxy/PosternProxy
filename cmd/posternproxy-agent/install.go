@@ -54,7 +54,7 @@ func readInstallConfig(path string) (agentconfig.Config, error) {
 	if path == "" {
 		return config, fmt.Errorf("--config-file is required; do not pass agent credentials as command arguments")
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the agent's own protected config file, not request input
 	if err != nil {
 		return config, fmt.Errorf("open protected agent configuration: %w", err)
 	}

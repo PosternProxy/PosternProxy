@@ -186,7 +186,7 @@ func (s *BackupService) ConfigurationStates(ctx context.Context) ([]ConfigState,
 
 // dumpTable returns all rows from a table as a slice of generic maps.
 func dumpTable(ctx context.Context, tx *sql.Tx, table string) ([]map[string]any, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+table) //nolint:gosec
+	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+table) // #nosec G202 -- table name comes from a fixed internal schema list, not user input
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func insertRow(ctx context.Context, tx *sql.Tx, table string, row map[string]any
 		placeholders[i] = "?"
 	}
 
-	query := fmt.Sprintf(
+	query := fmt.Sprintf( // #nosec G201 -- table and column names come from a fixed internal schema, not user input
 		"INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
 		table,
 		strings.Join(cols, ", "),
@@ -297,7 +297,7 @@ func replaceBackupTables(ctx context.Context, tx *sql.Tx, payload *BackupPayload
 		"certificates",
 	}
 	for _, table := range clearOrder {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil { // #nosec G202 -- table name comes from the fixed internal clearOrder list, not user input
 			return 0, fmt.Errorf("clear %s: %w", table, err)
 		}
 	}

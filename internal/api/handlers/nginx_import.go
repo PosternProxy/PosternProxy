@@ -74,7 +74,7 @@ func readNginxFile(r *http.Request) ([]byte, error) {
 
 	ct := r.Header.Get("Content-Type")
 	if len(ct) >= 9 && ct[:9] == "multipart" {
-		if err := r.ParseMultipartForm(maxSize); err != nil {
+		if err := r.ParseMultipartForm(maxSize); err != nil { // #nosec G120 -- upload size is bounded by maxSize (10 MB)
 			return nil, err
 		}
 		f, _, err := r.FormFile("file")

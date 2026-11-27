@@ -76,7 +76,7 @@ func TestRequestLogsOmitCredentialMaterial(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(ClientIdentity(nil))
 	router.Use(RequestLogger)
-	router.Get("/ws/agent", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unauthorized", 401) })
+	router.Get("/ws/agent", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unauthorized", http.StatusUnauthorized) })
 	for _, path := range []string{"/ws/agent?token=query-secret", "/unknown/path-secret?token=query-secret"} {
 		r := httptest.NewRequest("GET", path, nil)
 		r.Header.Set("Authorization", "Bearer header-secret")

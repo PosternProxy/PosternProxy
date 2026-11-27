@@ -57,7 +57,7 @@ func (h *CertificateHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
+	if err := r.ParseMultipartForm(5 << 20); err != nil { // #nosec G120 -- body already capped by MaxBytesReader(5 MiB) above
 		respondError(w, http.StatusBadRequest, "failed to parse form: "+err.Error())
 		return
 	}

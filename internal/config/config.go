@@ -79,7 +79,7 @@ func Load() *Config {
 // not exist (first boot), a new random secret is generated, written to path
 // with mode 0600, and returned. The directory is created if necessary.
 func loadOrCreateSecret(path string) string {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the server's own JWT-secret file, not request input
 	if err == nil {
 		if s := strings.TrimSpace(string(data)); s != "" {
 			return s
@@ -93,7 +93,7 @@ func loadOrCreateSecret(path string) string {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		panic("posternproxy: failed to create data directory for secret: " + err.Error())
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600) // #nosec G304 -- path is the server's own JWT-secret file, not request input
 	if errors.Is(err, os.ErrExist) {
 		return loadOrCreateSecret(path)
 	}

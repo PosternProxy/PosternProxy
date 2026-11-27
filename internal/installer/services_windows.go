@@ -77,7 +77,7 @@ func waitWindowsReady(ctx context.Context, services []*mgr.Service, urls ...stri
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("Windows services did not become ready: %w", ctx.Err())
+			return fmt.Errorf("windows services did not become ready: %w", ctx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}

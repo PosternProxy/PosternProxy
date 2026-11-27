@@ -1,7 +1,7 @@
 package installer
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- SHA1 is required by the Windows service-SID (S-1-5-80) derivation, not used as a security hash
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -114,7 +114,7 @@ func expectedServiceSID(name string) string {
 	for _, value := range utf16.Encode([]rune(strings.ToUpper(name))) {
 		input = binary.LittleEndian.AppendUint16(input, value)
 	}
-	hash := sha1.Sum(input)
+	hash := sha1.Sum(input) // #nosec G401 -- SHA1 is required by the Windows service-SID (S-1-5-80) derivation, not used as a security hash
 	result := "S-1-5-80"
 	for offset := 0; offset < len(hash); offset += 4 {
 		result += fmt.Sprintf("-%d", binary.LittleEndian.Uint32(hash[offset:offset+4]))
@@ -172,7 +172,7 @@ func validateWindowsSecurity(descriptor *windows.SECURITY_DESCRIPTOR, confidenti
 		if header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return fmt.Errorf("unsupported existing installation ACL")
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&entry.SidStart)).String()
+		sid := (*windows.SID)(unsafe.Pointer(&entry.SidStart)).String() // #nosec G103 -- required Win32 ACL entry layout access
 		if sid == "S-1-5-18" || sid == "S-1-5-32-544" {
 			continue
 		}
@@ -194,7 +194,7 @@ func applyWindowsSettings(path string, environment map[string]string) error {
 	if path == "" {
 		return validateWindowsSettings(environment)
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is an installer-controlled file, not request input
 	if err != nil {
 		return err
 	}
