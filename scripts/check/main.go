@@ -25,12 +25,12 @@ import (
 	"time"
 )
 
-// Tool versions. govulncheck is pinned to match CI; pin the rest to tagged
-// releases before relying on them in CI (ST-1 / SE-3).
+// Tool versions, pinned so the check is reproducible in CI (ST-1 / SE-3).
+// Bump these deliberately.
 const (
-	staticcheckVer = "latest"
-	gocycloVer     = "latest"
-	gosecVer       = "latest"
+	staticcheckVer = "v0.8.2"
+	gocycloVer     = "v0.6.0"
+	gosecVer       = "v2.30.0"
 	gitleaksVer    = "v8.30.1"
 	govulncheckVer = "v1.9.0"
 )

@@ -22,15 +22,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the check's gitleaks scan sees every commit
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Download modules
-        run: go mod download
 
       - name: Verify module checksums
         run: go mod verify
@@ -40,17 +39,8 @@ jobs:
           bash -n scripts/install.sh scripts/install-agent.sh scripts/build.sh scripts/install_test.sh
           bash scripts/install_test.sh
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-      - name: Race detector
-        run: go test -race ./...
-
-      - name: Go vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Check (format, vet, lint, complexity, size, tests, security)
+        run: go run ./scripts/check -go -race
 
       - name: Build controller and agent
         run: go build ./cmd/...
@@ -58,9 +48,6 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -72,32 +59,22 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type-check
-        run: npm run type-check
-
-      - name: Lint
-        run: npm run lint:check
-
-      - name: Build
-        run: npm run build
-
-      - name: Set up Go for the disposable browser controller
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
+      - name: Check (install, type-check, lint, build, audit)
+        run: go run ./scripts/check -frontend
+
       - name: Install Chromium
+        working-directory: frontend
         run: npx playwright install --with-deps chromium
 
       - name: Browser smoke tests
+        working-directory: frontend
         run: npm run test:e2e
-
-      - name: Audit dependencies
-        run: npm audit --audit-level=moderate
 
   caddy-acceptance:
     name: Pinned Caddy traffic
