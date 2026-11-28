@@ -9,5 +9,5 @@ import (
 )
 
 func installWindows(context.Context, Options, *agentconfig.Config, string) error {
-	return fmt.Errorf("Windows service installation requires Windows")
+	return fmt.Errorf("windows service installation requires Windows")
 }
