@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -93,12 +94,6 @@ func main() {
 	runGo := !feOnly
 	runFE := !goOnly
 
-	testArgs := []string{"test", "-count=1"}
-	if race {
-		testArgs = append(testArgs, "-race")
-	}
-	testArgs = append(testArgs, goPkgs...)
-
 	var steps []step
 	if runGo {
 		// Build the external analyzers as host-native binaries so they can be
@@ -125,7 +120,8 @@ func main() {
 		steps = append(steps,
 			step{name: "gocyclo", fetch: true, argv: []string{"go", "run", "github.com/fzipp/gocyclo/cmd/gocyclo@" + gocycloVer, "-over", strconv.Itoa(maxComplexity), "-ignore", `_test\.go`, "cmd", "internal"}},
 			step{name: "file size", fn: fileSizeCheck},
-			step{name: "go test", argv: concat([]string{"go"}, testArgs)},
+			step{name: "instructions", fn: instructionBudget},
+			step{name: "go test", fn: func() error { return goTestCheck(race) }},
 		)
 		// G104 (unchecked errors) fires on every deferred Close/io.Copy and
 		// drowns the real findings; drop it and keep the rest of the ruleset.
@@ -231,6 +227,130 @@ func gofmtCheck() error {
 		return fmt.Errorf("not gofmt-clean:\n%s\nfix with: gofmt -w %s", out, strings.Join(goDirs, " "))
 	}
 	return nil
+}
+
+// goTestCheck runs the Go tests, prints how many ran (TS-12), and fails if a
+// test fails or if no tests were discovered at all.
+func goTestCheck(race bool) error {
+	args := []string{"test", "-json", "-count=1"}
+	if race {
+		args = append(args, "-race")
+	}
+	args = append(args, goPkgs...)
+
+	cmd := exec.Command("go", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	var tests, passed, failed, skipped, pkgsNoTest int
+	var failedNames []string
+	pkgOut := map[string][]string{} // buffered per-package output, shown only on failure
+	dec := json.NewDecoder(stdout)
+	for {
+		var e struct{ Action, Package, Test, Output string }
+		if err := dec.Decode(&e); err != nil {
+			break
+		}
+		top := e.Test != "" && !strings.Contains(e.Test, "/") // a top-level test function
+		switch e.Action {
+		case "output":
+			pkgOut[e.Package] = append(pkgOut[e.Package], e.Output)
+		case "pass":
+			if e.Test == "" {
+				fmt.Printf("  ok   %s\n", e.Package)
+				delete(pkgOut, e.Package)
+			} else if top {
+				tests, passed = tests+1, passed+1
+			}
+		case "skip":
+			if e.Test == "" { // a package with no test files
+				pkgsNoTest++
+				delete(pkgOut, e.Package)
+			} else if top {
+				tests, skipped = tests+1, skipped+1
+			}
+		case "fail":
+			if e.Test == "" {
+				fmt.Printf("  FAIL %s\n", e.Package)
+				for _, line := range pkgOut[e.Package] { // dump detail for the failing package
+					fmt.Print(line)
+				}
+				delete(pkgOut, e.Package)
+			} else if top {
+				tests, failed = tests+1, failed+1
+				failedNames = append(failedNames, e.Package+"."+e.Test)
+			}
+		}
+	}
+	waitErr := cmd.Wait()
+
+	fmt.Printf("  %d tests: %d passed, %d failed, %d skipped (%d packages had no tests)\n",
+		tests, passed, failed, skipped, pkgsNoTest)
+	if len(failedNames) > 0 {
+		fmt.Fprintf(os.Stderr, "  failed: %s\n", strings.Join(failedNames, ", "))
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	if tests == 0 {
+		return fmt.Errorf("no tests were discovered in %s", strings.Join(goPkgs, " "))
+	}
+	return nil
+}
+
+// instructionBudget fails when an instruction file is over its line budget
+// (IN-3): the root AGENTS.md under 200 lines, any nested one under 150.
+func instructionBudget() error {
+	var over []string
+	err := filepath.WalkDir(".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "public", "tmp":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != "AGENTS.md" {
+			return nil
+		}
+		n, err := lineCount(p)
+		if err != nil {
+			return err
+		}
+		limit := 150
+		if filepath.ToSlash(p) == "AGENTS.md" {
+			limit = 200
+		}
+		if n > limit {
+			over = append(over, fmt.Sprintf("  %s (%d lines, limit %d)", filepath.ToSlash(p), n, limit))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(over) > 0 {
+		return fmt.Errorf("instruction files over budget (IN-3):\n%s", strings.Join(over, "\n"))
+	}
+	return nil
+}
+
+// lineCount returns the number of newlines in a file.
+func lineCount(p string) (int, error) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0, err
+	}
+	return bytes.Count(b, []byte{'\n'}), nil
 }
 
 // fileSizeCheck fails when a non-test Go file exceeds maxFileLines.
